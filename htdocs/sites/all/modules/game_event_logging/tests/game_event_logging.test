@@ -1,0 +1,78 @@
+<?php
+class GameEventsTest extends DrupalWebTestCase {
+  protected $user;
+  
+  public static function getInfo() {
+    return array(
+      'name' => 'Game Events Test',
+      'description' => 'Ensure that the game_event_logging module functions properly.',
+      'group' => 'Game Stats',
+    );
+  }
+
+  public function setUp() {
+    // Enable any modules required for the test.
+    parent::setUp(
+            'services',
+            'services_keyauth',
+            'amfphp',
+            'game_stats',
+            'game_event_logging',
+            'views'
+    );
+  }
+  
+  public function testGameEventRegister(){
+    $events = array(
+      array(
+        'name' => 'event_type_1',
+        'params' => array('et1_param1', 'et1_param2'),
+      ),
+      array(
+        'name' => 'event_type_2',
+        'params' => array('et2_param1', 'et2_param2'),
+      ),
+      array(
+        'name' => 'event_type_3',
+        'params' => array('et3_param1', 'et3_param2'),
+      ),
+      array(
+        'name' => 'event_type_4',
+        'params' => array('et4_param1', 'et4_param2'),
+      ),
+    );
+
+    $registered_events = _game_event_logging_svc_register_event_types($events);
+    $title3 = 'Event Type 3 Title';
+    $description3 = 'Event Type 3 Description';
+    $format3 = 'Parameter 1:%et3_param1 Parameter 2:%et3_param2';
+    _game_event_logging_update_event_type($registered_events['event_type_3'], $title3, $description3, $format3);
+    
+    $this->assertEqual(count($registered_events), 4, t('The register event is returning the right amount of values.'));
+    $this->assertEqual($registered_events['event_type_3'], 3, t('The register event is returning the correct array.'));
+
+    $event_args = array(
+      array(
+        'etid' => $registered_events['event_type_3'],
+        'timestamp' => time(),
+        'args' => array(
+          'et3_param1' =>  '1st Param 1',
+          'et3_param2' =>  '1st Param 2',
+        ),
+      ),
+      array(
+        'etid' => $registered_events['event_type_3'],
+        'timestamp' => time(),
+        'args' => array(
+          'et3_param1' =>  '2nd Param 1',
+          'et3_param2' =>  '2nd Param 2',
+        ),
+      ),
+    );
+    _game_event_logging_log_events(1, $event_args);
+
+    $check_message = 'Parameter 1:1st Param 1 Parameter 2:1st Param 2';
+    $log_message = game_event_logging_event_message(1);
+    $this->assertEqual($log_message, $check_message, t('The correct message is being displayed.'));
+  }
+}

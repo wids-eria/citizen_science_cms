@@ -1,0 +1,92 @@
+<?php
+
+/**
+ * Implementation of hook_install().
+ */
+function game_install() {
+  // Create tables.
+  drupal_install_schema('game');
+}
+
+/**
+ * Implementation of hook_uninstall().
+ */
+function game_uninstall() {
+  // Remove tables.
+  drupal_uninstall_schema('game');
+}
+
+/**
+ * Implementation of hook_schema().
+ */
+function game_schema() {
+	$schema['flash_game_fields'] = array(
+		'description' => 'Stores additional assignment content fields',
+		'primary key' => array('nid'),
+		'fields' => array(
+			'nid' => array(
+				'type' => 'int',
+	        	'unsigned' => TRUE,
+	        	'not null' => TRUE,
+				'description' => 'Node foreign key'
+			),
+			'main_swf' => array(
+				'type' => 'varchar',
+				'length' => 255,
+				'not null' => TRUE,
+				'description' => 'Path to the main swf'
+			),
+			'min_version' => array(
+				'type' => 'varchar',
+				'length' => 32,
+				'not null' => TRUE,
+				'description' => 'Minimum Flash Player version. Format: x.x.x'
+			),
+			'original_width' => array(
+				'type' => 'int',
+				'unsigned' => TRUE,
+				'not null' => TRUE,
+				'description' => 'Designed width'
+			),
+			'original_height' => array(
+				'type' => 'int',
+				'unsigned' => TRUE,
+				'not null' => TRUE,
+				'description' => 'Designed height'
+			),
+			'flashvars' => array(
+				'type' => 'varchar',
+				'length' => 255,
+				'description' => 'Variables to pass to the movie'
+			),
+			'query' => array(
+				'type' => 'varchar',
+				'length' => 255,
+				'description' => 'Query parameters to pass to the movie'
+			)
+		)
+	);
+	
+	return $schema;
+}
+
+function game_update_1() {
+	$ret = array();
+	db_add_field($ret, 'flash_game_fields', 'original_width', array(
+				'type' => 'int',
+				'unsigned' => TRUE,
+				'not null' => TRUE,
+				'default' => 0,
+			));
+	db_add_field($ret, 'flash_game_fields', 'original_height', array(
+				'type' => 'int',
+				'unsigned' => TRUE,
+				'not null' => TRUE,
+				'default' => 0,
+			));			
+	return $ret;
+}
+
+
+
+?>

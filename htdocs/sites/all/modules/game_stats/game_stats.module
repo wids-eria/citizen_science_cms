@@ -1,0 +1,844 @@
+<?php
+//Sets the difference allowed between the server time and client time (in seconds)
+define('TIME_DIFFERENCE_CHECK', 600);
+
+require_once('game_stats.api.inc');
+require_once('includes/game_stats.test_data.inc');
+
+/**
+ * Implementation of hook_perm().
+ */
+function game_stats_perm() {
+  $perms[] = 'admin game stats';
+  $perms[] = 'use game stats';
+  $perms[] = 'save stats';
+  return $perms;
+}
+
+/**
+ * Implementation of hook_service().
+ */
+function game_stats_service() {
+  return array(
+    array(
+      '#method' => 'tracking.startGame',
+      '#callback' => '_game_stats_svc_start_game',
+      //'#access arguments' => array('use game stats'),
+      '#access callback' => '_game_stats_start_game_access_check',
+      '#args' => array(
+        array(
+          '#type' => 'string',
+          '#name' => 'version',
+          '#optional' => FALSE,
+          '#description' => 'The version of the game.',
+        ),
+        array(
+          '#type' => 'int',
+          '#name' => 'time',
+          '#optional' => TRUE,
+          '#description' => 'The time to store in the session table. If not set uses server time.  Set in UTC.',
+          '#signed' => FALSE,
+        ),
+        array(
+          '#type' => 'int',
+          '#name' => 'psid',
+          '#optional' => TRUE,
+          '#description' => 'The play session id.',
+          '#signed' => FALSE,
+        )
+      ),
+      '#return' => 'struct',
+      '#file' => array('module' => 'game_stats','file' => 'inc', 'file name' => 'game_stats.services'),
+      '#help' => 'Start up the game and play session. Returns {psid:int, heartbeatSec:int, stats_enabled:boolean, ...}.',
+    ),
+    array(
+      '#method' => 'tracking.completeGame',
+      '#callback' => '_game_stats_svc_complete_game',
+      //'#access arguments' => array('use game stats'),
+      '#access callback' => '_game_stats_access_check',
+      '#args' => array(
+        array(
+          '#type' => 'int',
+          '#name' => 'psid',
+          '#optional' => FALSE,
+          '#description' => 'The play session id.',
+          '#signed' => FALSE,
+        ),
+        array(
+          '#type' => 'double',
+          '#name' => 'score',
+          '#optional' => FALSE,
+          '#description' => 'The score the user got on the game.',
+          '#signed' => FALSE,
+        ),
+        array(
+          '#type' => 'array',
+          '#name' => 'stats',
+          '#optional' => TRUE,
+          '#description' => "Passed in array of stats to be updated. array('type' => 'can only be values: enum, count, serializable, or label', 'sid' => 'stat id', 'value' => 'stat value'",
+        ),
+        array(
+          '#type' => 'int',
+          '#name' => 'time',
+          '#optional' => TRUE,
+          '#description' => 'The time to store in the session table. If not set uses server time. Set in UTC.',
+          '#signed' => FALSE,
+        ),
+      ),
+      '#file' => array('module' => 'game_stats','file' => 'inc', 'file name' => 'game_stats.services'),
+      '#help' => 'Close the game and play sessions.  Also saves the stats that are passed in the stats array.',
+    ),
+    array(
+      '#method' => 'tracking.saveStats',
+      '#callback' => '_game_stats_svc_save_stat',
+      //'#access arguments' => array('save stats'),
+      '#access callback' => '_game_stats_access_check',
+      '#args' => array(
+        array(
+          '#type' => 'int',
+          '#name' => 'psid',
+          '#optional' => FALSE,
+          '#description' => 'The play session id',
+          '#signed' => FALSE,
+        ),
+        array(
+          '#type' => 'array',
+          '#name' => 'stats',
+          '#optional' => FALSE,
+          '#description' => "Array of stats to be save.  array('sid' => 'stat id', 'value' => 'stat value')",
+        ),
+        array(
+          '#type' => 'int',
+          '#name' => 'uid',
+          '#optional' => TRUE,
+          '#description' => 'User id to save stat for.',
+          '#signed' => FALSE,
+        ),
+      ),
+      '#file' => array('module' => 'game_stats','file' => 'inc', 'file name' => 'game_stats.services'),
+      '#help' => 'Saves an array of stats for a specific play session.',
+    ),
+    array(
+      '#method' => 'tracking.registerStats',
+      '#callback' => '_game_stats_svc_register_stats',
+      //'#access arguments' => array('use game stats'),
+      '#access callback' => '_game_stats_register_stats_access_check',
+      '#args' => array(
+        array(
+          '#type' => 'array',
+          '#name' => 'stats',
+          '#optional' => FALSE,
+          '#description' => "Array of stat arrays to be registered.  array(array('adminName' => 'admin name of the stat', 'statType' => 'type of stat'))",
+        ),
+      ),
+      '#return' => 'struct',
+      '#file' => array('module' => 'game_stats','file' => 'inc', 'file name' => 'game_stats.services'),
+      '#help' => 'See if any stats need to be created.  Returns a map of stats with the stats adminName as the key and the stats sid as the value.'
+    ),
+    array(
+      '#method' => 'tracking.heartbeat',
+      '#callback' => '_game_stats_svc_heartbeat',
+      //'#access arguments' => array('use game stats'),
+      '#access callback' => '_game_stats_access_check',
+      '#args' => array(
+        array(
+          '#type' => 'int',
+          '#name' => 'psid',
+          '#optional' => FALSE,
+          '#description' => 'The play session id.',
+          '#signed' => FALSE,
+        ),
+        array(
+          '#type' => 'int',
+          '#name' => 'time',
+          '#optional' => TRUE,
+          '#description' => 'Current time.',
+          '#signed' => FALSE,
+        ),
+      ),
+      '#file' => array('module' => 'game_stats','file' => 'inc', 'file name' => 'game_stats.services'),
+      '#help' => 'A keep-alive event that stores the last time there was a connection.',
+    ),
+  );
+}
+
+/****************************
+ * SERVICE ACCESS CALLBACKS *
+ ****************************/
+function _game_stats_start_game_access_check($version, $time = NULL, $psid = NULL) {
+  global $user;
+  if(user_access('use game stats') || user_access('admin game stats'))
+    $access = TRUE;
+  else
+    $access = FALSE;
+  return $access;
+}
+
+function _game_stats_access_check($psid) {
+  global $user;
+  $gsid = _game_stats_get_game_session_by_psid($psid);
+  $user_gsid = _game_stats_user_gsid_check($user->uid, $gsid);
+  if((user_access('use game stats') && $user_gsid != FALSE) || user_access('admin game stats'))
+    $access = TRUE;
+  else
+    $access = FALSE;
+  return $access;
+}
+
+function _game_stats_register_stats_access_check($stats) {
+  global $user;
+  if(user_access('use game stats') || user_access('admin game stats'))
+    $access = TRUE;
+  else
+    $access = FALSE;
+  return $access;
+}
+
+/**
+ * Implementation of hook_views_api().
+ */
+function game_stats_views_api() {
+  return array(
+    'api' => 2,
+    'path' => drupal_get_path('module', 'game_stats') .'/views',
+  );
+}
+
+/**
+ * Implementation of hook_views_data_alter().
+ * @param $data
+ */
+function game_stats_views_data_alter(&$data) {
+  $data['users']['games_game_session_users'] = array(
+    'group' => 'Game Stats',
+    'title' => 'Game Session User',
+    'help' => 'Game session info for the user.',
+    'relationship' => array(
+      'base' => 'games_game_session_users',
+      'base field' => 'uid',
+      'relationship field' => 'uid',
+      'label' => 'Game Session'
+    )
+  );
+}
+
+function game_stats_preprocess_views_view(&$vars) {
+  $view = $vars['view'];
+  if($view->name == 'game_stats_admin') {
+    $game_name = db_result(db_query('SELECT title FROM services_keys sk
+      INNER JOIN games_game_id ggi ON ggi.kid = sk.kid
+      WHERE ggi.game_id = %d', arg(3)));
+    drupal_set_title('Game Stats for '.$game_name);
+  }
+}
+
+/**
+ * Checks if there is a difference in time that is greater then the defined variable
+ * @param $time
+ */
+function _game_stats_time_diff_check($time){
+  if(!is_null($time) && is_numeric($time)){
+    $stored_time = $time;
+    if(abs($time - time()) >= TIME_DIFFERENCE_CHECK){
+      //watchdog('game_stats', 'The time between the server time and client time has a large difference. Using server time instead.', NULL, WATCHDOG_WARNING);
+      $stored_time = time();
+    }
+  }else{
+    $stored_time = time();
+  }
+  return $stored_time;
+}
+
+/**
+ * Closes all open play sessions
+ * Enter description here ...
+ * @param int $game_id
+ */
+function _game_stats_close_play_sessions($game_id, $uid = NULL) {
+  global $user;
+  if(is_null($uid))
+    $uid = $user->uid;
+
+  //TODO: need to take into account that there will be two seperate table for game_sessions
+  db_query("UPDATE {games_play_session} gps
+    LEFT JOIN {games_game_session} ggs ON ggs.gsid = gps.gsid
+    LEFT JOIN {games_game_session_users} ggsu ON ggsu.gsid = gps.gsid
+    SET gps.closed = 1
+    WHERE ggsu.uid = %d AND gps.game_id = %d AND gps.closed = 0", $uid, $game_id);
+}
+
+/**
+ * Start(create) Play session
+ * @param $session_id
+ * @param $game_id
+ * @param $gsid
+ * @param $version
+ * @param $time
+ */
+function _game_stats_start_play_session($game_id, $gsid, $version, $uid = NULL, $time = NULL){
+  $stored_time = _game_stats_time_diff_check($time);
+  $session_id = session_id();
+  //TODO: add uid to the mix (not sure if better to use as param or use global)
+  $data = array(
+    'game_id' => $game_id,
+    'session_id' => $session_id,
+    'start_time' => $stored_time,
+    'end_time' => $stored_time,
+    'version' => $version,
+    'gsid' => $gsid,
+    'closed' => 0,
+    'uid' => $uid
+  );
+  drupal_write_record('games_play_session', $data);
+  $psid = $data['psid'];
+  return $psid;
+}
+
+function _game_stats_get_game_session_by_psid($psid) {
+  //TODO: add user id to the mix
+  return db_result(db_query("SELECT gsid FROM {games_play_session} WHERE psid = %d", $psid));
+}
+
+/**
+ * gets the current game id from the game_id table.
+ * If $api_key is NULL, it will try to get the current key from the services_keyauth module
+ */
+function _game_stats_get_game_id($api_key = NULL) {
+  module_load_include('inc', 'services_keyauth', 'services_keyauth');
+
+  if(!isset($api_key))
+    $api_key = services_keyauth_get_current_key();
+
+  $result = db_result(db_query("SELECT game_id FROM {games_game_id} WHERE kid = '%s'", $api_key));
+  if($result === FALSE || empty($result))
+    throw new Exception('The game id is not being set properly.');
+  return $result;
+}
+
+/**
+ * hook_services_keyauth_insert
+ * inserts a new row in the games_game_id table when a key is created
+ * @param $kid
+ */
+function game_stats_services_keyauth_insert($kid) {
+  $data = array('kid' => $kid);
+  drupal_write_record('games_game_id', $data);
+}
+
+/**
+ * hook_services_keyauth_delete
+ * deletes a new row in the games_game_id table when a key is deleted
+ * @param $kid
+ */
+function game_stats_services_keyauth_delete($kid) {
+  db_query("DELETE FROM {games_game_id} WHERE kid = '%s'", $kid);
+}
+
+/**
+ * Sets the time in the db for the heartbeat of the play session.
+ * @param $time
+ */
+function _game_stats_set_heartbeat_time($psid, $time = NULL) {
+  $stored_time = _game_stats_time_diff_check($time);
+  $psid_check = db_result(db_query("SELECT COUNT(*) FROM {games_play_session} WHERE closed = 1 AND psid = %d", $psid));
+  if($psid_check == 0) {
+    db_query('UPDATE {games_play_session} SET end_time = %d WHERE psid = %d', $stored_time, $psid);
+    if(db_affected_rows() < 1)
+      throw new Exception('The heartbeat failed on updating the time.');
+  } else {
+    throw new Exception('The heartbeat recording failed becuase the session is already closed.');
+  }
+}
+
+function game_stats_menu() {
+  //Admin stat path
+  $items['admin/build/game_stats'] = array(
+    'page callback' => '_game_stats_game_list',
+    'access callback' => 'user_access',
+    'access arguments' => array('admin game stats'),
+    'title' => 'Game stats',
+    'description' => 'List of games that lead to the games stats.',
+    'type' =>  MENU_NORMAL_ITEM
+  );
+  $items['admin/build/game_stats/list'] = array(
+    'page callback' => '_game_stats_game_list',
+    'access callback' => 'user_access',
+    'access arguments' => array('admin game stats'),
+    'title' => 'Games',
+    'description' => 'List of games with statistics enabled.',
+    'type' =>  MENU_DEFAULT_LOCAL_TASK
+  );
+  $items['admin/build/game_stats/sync'] = array(
+    'page callback' => '_game_stats_sync_page',
+    'access callback' => 'user_access',
+    'access arguments' => array('admin game stats'),
+    'title' => 'Sync',
+    'description' => 'Sync game list.',
+    'type' =>  MENU_LOCAL_TASK
+  );
+  $items['admin/build/game_stats/stat/%'] = array(
+    'page callback' => 'drupal_get_form',
+    'page arguments' => array('game_stats_stat_form', 4),
+    'access callback' => 'user_access',
+    'access arguments' => array('admin game stats'),
+    'title' => 'Edit Game Stat',
+    'type' =>  MENU_CALLBACK
+  );
+  $items['admin/build/game_stats/stat/%/edit'] = array(
+    'page callback' => 'drupal_get_form',
+    'page arguments' => array('game_stats_stat_form', 4),
+    'access callback' => 'user_access',
+    'access arguments' => array('admin game stats'),
+    'title' => 'Edit Game Stat',
+    'type' =>  MENU_DEFAULT_LOCAL_TASK
+  );
+
+  //Delete stat path
+  $items['admin/build/game_stats/stat/%/delete'] = array(
+    'page callback' => 'drupal_get_form',
+    'page arguments' => array('game_stats_stat_delete_check', 4),
+    'access callback' => 'user_access',
+    'access arguments' => array('admin game stats'),
+    'title' => 'Delete Game Stat',
+    'description' => 'Delete a selected stat.',
+    'type' =>  MENU_CALLBACK
+  );
+
+  //TODO: moving these to .inc files.
+  /*
+  $items['admin/build/game_stats/create-test-data'] = array(
+    'page callback' => 'games_stats_insert_test_data',
+    'access callback' => 'user_access',
+    'access arguments' => array('admin game stats'),
+    'title' => 'Create test data',
+    'type' =>  MENU_LOCAL_TASK
+  );
+  $items['admin/build/game_stats/create-test-count-data'] = array(
+    'page callback' => 'games_stats_insert_test_count_data',
+    'access callback' => 'user_access',
+    'access arguments' => array('admin game stats'),
+    'title' => 'Create test count data',
+    'type' =>  MENU_LOCAL_TASK
+  );
+  $items['admin/build/game_stats/create-test-serialized-data'] = array(
+    'page callback' => 'games_stats_insert_test_serialized_data',
+    'access callback' => 'user_access',
+    'access arguments' => array('admin game stats'),
+    'title' => 'Create test serialized data',
+    'type' =>  MENU_LOCAL_TASK
+  );
+  */
+  return $items;
+}
+
+function _game_stats_game_list() {
+  $query = db_query("SELECT sk.title, ggi.game_id
+    FROM {services_keys} sk
+    INNER JOIN {games_game_id} ggi ON ggi.kid = sk.kid");
+  while (($item = db_fetch_array($query)) !== FALSE) {
+    $output .= l($item['title'], 'admin/build/game_stats/'.$item['game_id']).'<br />';
+  }
+  return '<h2>Select a Game</h2>'.$output;
+}
+
+/**
+ * Form to edit the info for a stat.  Addes the ability to give the stat a name and description.
+ * If type enum setup the enum values title and description for each enum value related to the stat. 
+ */
+function game_stats_stat_form(&$form_state, $sid) {
+  $stat = game_stats_stat_load($sid);
+  
+  $form['#tree'] = TRUE;
+  $form['stat']['sid'] = array(
+    '#type' => 'value',
+    '#value' => $sid,
+  );
+  $form['stat']['name'] = array(
+    '#type' => 'textfield',
+    '#title' => t('Name'),
+    '#description' => t('Name of the stat displayed to users.'),
+    '#default_value' => $stat['name'],
+  );
+  $form['stat']['description'] = array(
+    '#type' => 'textarea',
+    '#title' => t('Description'),
+    '#description' => t('A discription of the stat.'),
+    '#default_value' => $stat['description'],
+  );
+  //Stat settings
+  $form['stat']['hidden'] = array(
+    '#title' => t('Hide stat'),
+    '#description' => t('If set to true this stat won\'t display on the game stats page for a user.'),
+    '#type' => 'radios',
+    '#options' => array('False', 'True'),
+    '#default_value' => isset($stat['hidden']) ? $stat['hidden'] : 0,
+  );
+  $form['stat']['weight'] = array(
+    '#title' => 'Stat weight',
+    '#description' => t('The bigger the number the lower the value will display on the game stats page for a user.'),
+    '#type' => 'textfield',
+    '#size' => 10,
+    '#maxlength' => 10,
+    '#default_value' => isset($stat['weight']) ? $stat['weight'] : '',
+  );
+	
+  if($stat['stat_type'] == 'enum'){
+    $query = db_query('SELECT DISTINCT title, description, eid
+      FROM {games_enum_stat}
+      LEFT JOIN {games_enum} ON games_enum.eid = games_enum_stat.value
+      WHERE games_enum_stat.sid = %d', $sid);
+    $count = 1;
+    $form['enum'] = array(
+      '#type' => 'fieldset',
+      '#title' => t('Enum value section'),
+    );
+    while(($enum = db_fetch_array($query)) !== FALSE) {
+      $form['enum'][$enum['eid']]['eid'] = array(
+        '#type' => 'value',
+        '#value'=> $enum['eid'],
+      );
+      $form['enum'][$enum['eid']]['title'] = array(
+        '#type' => 'textfield',
+        '#title' => t('Enumerator Title @d', array('@d' => $count)),
+        '#description' => t('The title to be associated with the enumerator stat.'),
+        '#default_value' => $enum['title'],
+      );
+      $form['enum'][$enum['eid']]['description'] = array(
+        '#type' => 'textarea',
+        '#title' => t('Enumerator Description @d', array('@d' => $count)),
+        '#description' => t('The description associated with the enumerator stat.'),
+        '#default_value' => $enum['description'],
+      );
+      $count++;
+    }
+  }
+  
+  $form['buttons']['save'] = array(
+    '#type'			=> 'submit',
+    '#value'		=> t('Save'),
+    '#attributes'	=> array('class' => 'form-graphic-button save-button', 'title' => 'Save'),
+    '#prefix'		=> '<div class="form-button-wrapper save-button">',
+    '#suffix'		=> '</div>',
+  );
+  $form['buttons']['delete'] = array(
+    '#type'			=> 'submit',
+    '#value'		=> t('Delete'),
+    '#attributes'	=> array('class' => 'form-graphic-button delete-button', 'title' => 'Delete'),
+    '#prefix'		=> '<div class="form-button-wrapper delete-button">',
+    '#suffix'		=> '</div>',
+  );
+  return $form;
+}
+
+function game_stats_stat_form_submit($form_id, &$form_state) {
+  switch($form_state['values']['op']) {
+    case 'Delete':
+      $path = 'admin/content/game_stats/'.$form_state['values']['stat']['sid'].'/delete';
+      unset($_REQUEST['destination']);
+      drupal_goto($path);
+      break;
+    case 'Save':
+      game_stats_stat_update($form_state['values']['stat'], $form_state['values']['enum']);
+      break;
+  }
+}
+
+/**
+ * Menu callback for syncing game ids with api keys
+ */
+function _game_stats_sync_page() {
+  _game_stats_sync();
+  return "Synced.";
+}
+
+/**
+ * Sync game ids with api keys
+ */
+function _game_stats_sync() {
+  $result = db_query("SELECT kid FROM {services_keys}");
+  while(($key_object = db_fetch_object($result)) !== FALSE) {
+    $kid = $key_object->kid;
+    $exists_result = db_result(db_query("SELECT game_id FROM {games_game_id} WHERE kid = %d", $kid));
+
+    if($exists_result === FALSE){
+      $data = array('kid' => $kid);
+      drupal_write_record('games_game_id', $data);
+    }
+  }
+}
+
+/**
+ * Menu callback -- ask for confirmation of stat deletion
+ */
+function game_stats_stat_delete_check(&$form_state, $sid) {
+  $stat = db_fetch_array(db_query('SELECT name, admin_name FROM {games_stats} WHERE sid = %d',$sid));
+  if(empty($stat['name']))
+    $name = $stat['admin_name'];
+  else
+    $name = $stat['name'];
+
+  $form['sid'] = array(
+    '#type' => 'value',
+    '#value' => $sid,
+  );
+  return confirm_form(
+          $form,
+          t('Are you sure you want to delete %name ?', array('%name' => $name)),
+          'admin/content/game_stats/'.$sid,
+          t('This action cannot be undone.'),
+          t('Delete'),
+          t('Cancel')
+          );
+}
+
+/**
+ * Submit function of the confirm_form to delete stats.
+ */
+function game_stats_stat_delete_check_submit($form, &$form_state) {
+  if ($form_state['values']['confirm'])
+    game_stats_stat_delete($form_state['values']['sid']);
+  $form_state['redirect'] = 'admin/content/game_stats';
+}
+
+/**
+ * Create function for a stat.
+ * @param $game_id
+ * @param $settings
+ * @param $admin_name
+ * @param $stat_type
+ */
+function game_stats_stat_create($game_id, $settings, $admin_name, $stat_type) {
+  $data = array(
+    'game_id' => $game_id,
+    'settings' => $settings,
+    'admin_name' => $admin_name,
+    'stat_type' => $stat_type,
+  );
+  drupal_write_record('games_stats', $data);
+  return $data;
+}
+
+/**
+ * Load function for a stat.  If sid is not provide returns all stats.
+ * @param $sid
+ */
+function game_stats_stat_load($sid) {
+  $stat = db_fetch_array(db_query('SELECT * FROM {games_stats} WHERE sid = %d', $sid));
+  return $stat;
+}
+
+/**
+ * Update function for a stat.
+ * @param $stat
+ * @param $enum_data
+ */
+function game_stats_stat_update($stat, $enum_data = NULL) {
+  drupal_write_record('games_stats', $stat, array('sid'));
+  if(!is_null($enum_data)) {
+    foreach($enum_data as $enum){
+      drupal_write_record('games_enum', $enum, array('eid'));
+    }
+  }
+}
+
+/**
+ * Delete function for a stat.
+ * @param $sid
+ */
+function game_stats_stat_delete($sid) {
+  $stat = db_fetch_array(db_query('SELECT * FROM {games_stats} WHERE sid = %d', $sid));
+  db_query("DELETE FROM {games_stats} WHERE sid = %d", $sid);
+  game_stats_value_delete($sid, $stat['stat_type'], TRUE);
+}
+
+/**
+ * Create function for stat values.
+ * @param $sid
+ * @param $gsid
+ * @param $type
+ * @param $value
+ * @param $uid (optional)
+ * @throws Exception
+ */
+function game_stats_value_create($sid, $gsid, $type, $value, $uid = NULL) {
+  $table = 'games_'.$type.'_stat';
+
+  if($type == 'count') {
+    if(!is_numeric($value))
+      throw new Exception('The value for the stat passed is not the correct format.  Please pass an integer in for count stat values.');
+  }
+	
+  //If type is enum check if value is a unique one if it is add it to the enum table otherwise store the enum id as the stat value.
+  if($type == 'enum') {
+    $enum_id = db_result(db_query('SELECT eid FROM {games_enum} WHERE value = "%s" AND sid = %d', $value, $sid));
+    if($enum_id === FALSE) {
+      $data = array('sid' => $sid,'value' => $value);
+      drupal_write_record('games_enum', $data);
+      $enum_id = $data['eid'];
+    }
+    $value = $enum_id;
+  }
+
+  $data = array(
+    'gsid' => $gsid,
+    'sid' => $sid,
+    'value' => $value,
+    'uid' => $uid,
+  );
+
+  if(is_null($uid)) {
+    $user_stat_id = db_result(db_query('SELECT user_stat_id FROM {%s} WHERE gsid = %d AND sid = %d', $table, $gsid, $sid));
+  } else {
+    $user_stat_id = db_result(db_query('SELECT user_stat_id FROM {%s} WHERE gsid = %d AND sid = %d AND uid = %d', $table, $gsid, $sid, $uid));
+  }
+
+  if($user_stat_id == FALSE) {
+    drupal_write_record($table, $data);
+  } else {
+    $data['user_stat_id'] = $user_stat_id;
+    drupal_write_record($table, $data, array('user_stat_id'));
+  }
+}
+
+/**
+ * Load function for stat values. If type is enum returns an array.
+ * @param $sid
+ * @param $gsid
+ * @param $uid (optional)
+ */
+function game_stats_value_load($sid, $gsid, $uid = NULL) {
+  $type = db_result(db_query('SELECT stat_type FROM {games_stats} WHERE sid = %d', $sid));
+  $table = 'games_'.$type.'_stat';
+  
+  if(is_null($uid))
+    $stat_value = db_result(db_query('SELECT value FROM {%s} WHERE sid = %d AND gsid = %d', $table, $sid, $gsid));
+  else
+    $stat_value = db_result(db_query('SELECT value FROM {%s} WHERE sid = %d AND gsid = %d AND uid = %d', $table, $sid, $gsid, $uid));
+
+  if($type == 'enum') {
+    $stat_value = db_result(db_query('SELECT value FROM {games_enum} WHERE eid = %d', $stat_value));
+  }
+  return $stat_value;
+}
+
+/**
+ * Update function for stat values.  (might be cruft)
+ * @param $sid
+ * @param $gsid
+ * @param $type
+ * @param $value
+ * @param $uid (optional)
+ * @throws Exception
+ */
+function game_stats_value_update($sid, $gsid, $type, $value, $uid = NULL) {
+  $table = 'games_'.$type.'_stat';
+  $data = array(
+    'sid' => $sid,
+    'gsid' => $gsid,
+    'value' => $value,
+    'uid' => $uid,
+  );
+  drupal_write_record($table, $data, array('sid', 'gsid'));
+}
+
+/**
+ * Delete function for stat values. If delete_enum is set to true then all enums related to the sid will be deleted.
+ * @param $sid
+ * @param $type
+ * @param $delete_enum
+ * @param $gsid
+ */
+function game_stats_value_delete($sid, $type, $delete_enum = FALSE, $gsid = NULL) {
+  //TODO:include uid in the params and use in the queries
+  $table = 'games_'.$type.'_stat';
+  if(is_null($gsid))
+    db_query('DELETE FROM {%s} WHERE sid = %d', $table, $sid);
+  else
+    db_query('DELETE FROM {%s} WHERE sid = %d AND gsid = %d', $table, $sid, $gsid);
+  
+  if($delete_enum && $type == 'enum')
+    db_query('DELETE FROM {games_enum} WHERE sid = %d', $sid);
+}
+
+/**
+ * Implementation of hook_draggableviews_handlers().
+ */
+function game_stats_draggableviews_handlers() {
+  return array(
+    'game_stats' => array(
+      'file' => 'draggableviews_handler_game_stats.inc',
+      'title' => t('Game Stats'),
+      'desciption' => 'Default implementation with game stats',
+      'handler' => 'draggableviews_handler_game_stats',
+    ),
+  );
+}
+
+function game_stats_date_api_fields($field) {
+  if($field == 'games_play_session.end_time')
+    return array('dummy' => TRUE);
+}
+
+function _game_stats_last_psid($gsid) {
+  return db_result(db_query('SELECT * FROM {games_play_session} WHERE closed = 0 AND gsid = %d', $gsid));
+}
+
+function _game_stats_enter_session_data($game_id, $start_time, $gsid = 0, $complete = FALSE, $end_time = NULL, $update = FALSE) {
+  if($update) {
+    $game_session_data = array(
+      'gsid' => $gsid,
+      'game_id' => $game_id,
+      'end_time' => $end_time,
+      'complete' => $complete
+    );
+    drupal_write_record('games_game_session', $game_session_data, 'gsid');
+  } else {
+    $game_session_data = array(
+      'game_id' => $game_id,
+      'start_time' => $start_time,
+      'complete' => $complete
+    );
+    drupal_write_record('games_game_session', $game_session_data);
+  }
+  return $game_session_data;
+}
+
+function _game_stats_enter_session_user_data($gsid, $uid, $score = 0, $update = FALSE) {
+  if($update) {
+    $user_session_data = array(
+      'gsid' => $gsid,
+      'uid' => $uid,
+      'score' => $score
+    );
+    $written = drupal_write_record('games_game_session_users', $user_session_data, array('gsid', 'uid'));
+  } else {
+    $user_session_data = array(
+      'gsid' => $gsid,
+      'uid' => $uid,
+      'score' => $score
+    );
+    $written = drupal_write_record('games_game_session_users', $user_session_data);
+  }
+  return $user_session_data;
+}
+
+function _game_stats_user_gsid_check($uid, $gsid) {
+  return db_result(db_query('SELECT gsid FROM {games_game_session_users} WHERE uid = %d AND gsid = %d', $uid, $gsid));
+}
+
+// -------------------------------------  REQUIRED FOR Drupal 6.x installations (by services) ------------------------------------- //
+/*
+ * Implementation of hook_enable()
+ * Perform necessary actions after module is enabled. (like clear the services:methods cache)
+ */
+function game_stats_enable() {
+  cache_clear_all('services:methods', 'cache');
+}
+
+/*
+ * Implementation of hook_disable()
+ * Perform necessary actions before module is disabled. (like clear the services:methods cache)
+ */
+function game_stats_disable() {
+  cache_clear_all('services:methods', 'cache');
+}

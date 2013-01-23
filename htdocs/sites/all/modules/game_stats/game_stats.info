@@ -1,0 +1,9 @@
+name = Game Stats
+description = "Tracks and stores stats from games played."
+package = Games
+version = 6.x-1.x-dev
+core = 6.x
+dependencies[] = views
+dependencies[] = services
+dependencies[] = services_keyauth
+dependencies[] = views_bonus_export

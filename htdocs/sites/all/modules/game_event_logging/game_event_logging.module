@@ -1,0 +1,479 @@
+<?php
+module_load_include('inc', 'game_event_logging', 'includes/game_event_logging.test_data');
+module_load_include('inc', 'game_event_logging', 'game_event_logging.services');
+
+/**
+ * Implementation of hook_perm().
+ */
+function game_event_logging_perm() {
+  $perms[] = 'use game event logging';
+  $perms[] = 'admin game event logging';
+  return $perms;
+}
+
+/**
+ * Implementation of hook_service().
+ */
+function game_event_logging_service() {
+  return array(
+    array(
+      '#method' => 'tracking.registerEventTypes',
+      '#callback' => '_game_event_logging_svc_register_event_types',
+      '#access arguments' => array('use game event logging'),
+      '#args' => array(
+        array(
+          '#type' => 'array',
+          '#name' => 'events',
+          '#optional' => FALSE,
+          '#description' => "Array of event arrays to be registered.  array{'name':string, 'params':array('param_name' - string)}",
+        ),
+      ),
+      '#return' => 'struct',
+      '#file' => array('module' => 'game_event_logging.services', 'file' => 'inc'),
+      '#help' => 'See if any events need to be created.  Returns array{event_type_name:event_type_id}'
+    ),
+    array(
+      '#method' => 'tracking.logEvents',
+      '#callback' => '_game_event_logging_svc_log_events',
+      '#access arguments' => array('use game event logging'),
+      '#args' => array(
+        array(
+          '#type' => 'int',
+          '#name' => 'psid',
+          '#optional' => FALSE,
+          '#description' => 'The play session id.',
+          '#signed' => FALSE,
+        ),
+        array(
+          '#type' => 'array',
+          '#name' => 'eventArgs',
+          '#optional' => FALSE,
+          '#description' => "Array of events to be logged. array{'etid':int, 'timestamp':int, 'args':array{'parameter name' => 'argument value'}}",
+        ),
+      ),
+      '#file' => array('module' => 'game_event_loggin.services', 'file' => 'inc'),
+      '#help' => 'Saves an array of arguments for a specific event.',
+    ),
+  );
+}
+
+/**
+ * Registers events in the db if they are not created yet.
+ * @param $events - array('name' => $event_type_name, 'params' => array($param_name, $param_name, ...))
+ * @return an array with keys event_type name and values event_type id 
+ * @throws Exception
+ */
+function _game_event_logging_register_event_types($events) {
+  $event_types = array();
+  foreach($events as $event) {
+    $etid = db_result(db_query("SELECT etid FROM {game_event_type} WHERE name = '%s'", $event['name']));
+
+    if($etid === FALSE) {
+      $event_data = _game_event_logging_create_event_type($event['name']);
+      $event_types[$event_data['name']] = $event_data['etid'];
+      
+      foreach($event['params'] as $idx => $name) {
+        $param_data = _game_event_logging_create_param($event_data['etid'], $idx, $name);
+      }
+    } else {
+      $query = db_query("SELECT idx,name FROM {game_event_type_param} WHERE etid = %d", $etid);
+      $stored_params = array();
+      
+      while($row = db_fetch_array($query)) {
+        $stored_params[$row['idx']] = $row['name'];
+      }
+      
+      if(count($event['params']) != count($stored_params))  {
+        $rcount = count($event['params']);
+        $ecount = count($stored_params);
+        throw new Exception("Parameter count mismatch on event type $etid. Received $rcount. Expected $ecount.");
+      }
+      
+      if(count($stored_params) > 0) {
+        foreach($stored_params as $idx => $name) {
+          if($event['params'][$idx] !== $name)
+            throw new Exception("Parameter $idx name mismatch on event type $etid.");
+        }
+      }
+      $event_types[$event['name']] = $etid;
+    }
+  }
+  return $event_types;
+}
+
+/**
+ * Logs the event data into the db.
+ * @param $psid
+ * @param $events - array('etid' => $event_type_id, 'timestamp' => $time, 'args' => array($param_name => $arg_value))
+ * @throws Exception
+ */
+function _game_event_logging_log_events($psid, $events) {
+  $open = game_stats_psid_is_open($psid);
+
+  //if(!$open)
+    //throw new Exception("Play session $psid is already closed or not created.");
+
+  foreach($events as $event) {
+    $etid = (int) $event['etid'];
+
+    if(!_game_event_logging_type_exists($etid))
+      throw new Exception("Event type $etid does not exist.");
+
+    $new_event = _game_event_logging_create_event($psid, $etid, $event['timestamp']);
+    foreach($event['args'] as $idx => $arg) {
+      _game_event_logging_create_argument($new_event['eid'], $idx, $arg);
+    }
+  }
+}
+
+//CRUD operations
+//CREATE functions for events
+function _game_event_logging_create_event_type($name) {
+  $data = array(
+    'name' => $name,
+  );
+  drupal_write_record('game_event_type', $data);
+  return $data;
+}
+function _game_event_logging_create_param($etid, $idx, $name) {
+  $data = array(
+    'etid' => $etid,
+    'idx' => $idx,
+    'name' => $name,
+  );
+  drupal_write_record('game_event_type_param', $data);
+  return $data;
+}
+function _game_event_logging_create_event($psid, $etid, $timestamp = NULL) {
+  if(is_null($timestamp))
+    $timestamp = time();
+
+  $data = array(
+    'psid' => $psid,
+    'timestamp' => $timestamp,
+    'etid' => $etid,
+  );
+  drupal_write_record('game_event', $data);
+  return $data;
+}
+function _game_event_logging_create_argument($eid, $idx, $value) {
+  $data = array(
+    'eid' => $eid,
+    'idx' => $idx,
+    'value' => $value,
+  );
+  drupal_write_record('game_event_arg', $data);
+}
+
+//LOAD funcions for events
+function _game_event_logging_load_event_type($etid) {
+  $event = db_fetch_array(db_query('SELECT * FROM {game_event_type} WHERE etid = %d', $etid));
+  return $event;
+}
+
+//UPDATE functions for events
+function _game_event_logging_update_event_type($etid, $title, $description, $format) {
+  $data = array(
+    'etid' => $etid,
+    'title' => $title,
+    'description' => $description,
+    'format' => $format,
+  );
+  drupal_write_record('game_event_type', $data, 'etid');
+}
+
+//DELETE functions for events
+function _game_event_logging_delete_event_type($etid) {
+  db_query('DELETE FROM {game_event_type} WHERE etid = %d', $etid);
+  db_query('DELETE FROM {game_event} WHERE etid = %d', $etid);
+  db_query('DELETE FROM {game_event_type_param} WHERE etid = %d', $etid);
+}
+function _game_event_logging_delete_param($etid, $idx) {
+  db_query('DELETE FROM {game_event_type_param} WHERE etid = %d AND idx = %d', $etid, $idx);
+  _game_event_logging_delete_argument($etid, $idx);
+}
+function _game_event_logging_delete_event($eid) {
+  db_query('DELETE FROM {game_event} WHERE eid = %d', $eid);
+  _game_event_logging_delete_argument($eid);
+}
+function _game_event_logging_delete_argument($eid, $idx = NULL) {
+  if(!isset($idx))
+    db_query('DELETE FROM {game_event_arg} WHERE eid = %d', $eid);
+  else
+    db_query('DELETE FROM {game_event_arg} WHERE eid = %d AND idx = %d', $eid, $idx);
+}
+
+//EXIST functions for events
+function _game_event_logging_type_exists($etid) {
+  $result = db_result(db_query("SELECT etid FROM {game_event_type} WHERE etid = %d", $etid));
+  return $result !== FALSE;
+}
+
+/**
+ * Gets the params and returns an array with the idx is the key and the name as the value
+ * @param $etid
+ * @param $by_name
+ * @return an array with keys param name and values param id 
+ */
+function game_event_logging_get_params_by_etid($etid) {
+  $query = db_query("SELECT name FROM {game_event_type_param} WHERE etid = %d ORDER BY idx", $etid);
+  $params = array();
+  
+  while($row = db_fetch_array($query)) {
+    $params[] = $row['name'];
+  }
+  return $params;
+}
+
+/**
+ * Constructs the event message from the event it.
+ * @param $eid
+ * @return string with the params replaced with the arguments to display the event
+ */
+function game_event_logging_event_message($eid) {
+  $event_type = db_fetch_array(db_query('SELECT e.etid, et.format FROM {game_event} e LEFT JOIN {game_event_type} et ON e.etid = et.etid WHERE e.eid = %d', $eid));
+  $params = game_event_logging_get_params_by_etid($event_type['etid']);
+  $format = $event_type['format'];
+  $default_format = ' | ';
+  foreach($params as $idx => $param_name) {
+    //TODO: This could be done in one query instead of in a loop
+    $arg_value = db_result(db_query('SELECT value FROM {game_event_arg} WHERE eid = %d AND idx = %d', $eid, $idx));
+    if(!empty($format))
+      $format = str_replace('%'.$param_name, $arg_value, $format);
+    else
+      $default_format .= $param_name.': '.$arg_value.' | ';
+  }
+  $output = empty($format) ? $default_format : $format;
+  return $output;
+}
+
+/**
+ * Takes an event id and then returns an array with param name as key and arg value as value.
+ * @param $eid
+ */
+function game_event_logging_get_args_for_event($eid) {
+  $etid = db_result(db_query('SELECT etid FROM {game_event} WHERE eid = %d', $eid));
+  $params = game_event_logging_get_params_by_etid($etid);
+  foreach($params as $idx => $param_name) {
+    $arguments[$param_name] = db_result(db_query('SELECT value FROM {game_event_arg} WHERE eid = %d AND idx = %d', $eid, $idx));
+  }
+  return $arguments;
+}
+
+function game_event_logging_menu() {
+  //Update event type form path
+  $items['admin/build/game-events'] = array(
+    'title' => 'Game events',
+    'description' => 'Game event logging',
+    'page callback' => '_games_event_settings_page',
+    'access callback' => 'user_access',
+    'access arguments' => array('admin game event logging'),
+    'type' => MENU_NORMAL_ITEM
+  );
+  $items['admin/build/game-events/settings'] = array(
+      'title' => 'Settings',
+      'page callback' => '_games_event_settings_page',
+      'description' => 'Game event logging',
+      'access callback' 	=> 'user_access',
+      'access arguments' 	=> array('admin game event logging'),
+      'type' => MENU_DEFAULT_LOCAL_TASK
+      );
+  /*
+  $items['admin/build/game-events/create-test-data'] = array(
+    'page callback' => 'games_event_insert_test_data',
+    'access callback' => 'user_access',
+    'access arguments' => array('admin game event logging'),
+    'title' => 'Insert test data',
+    'type' => MENU_LOCAL_TASK
+  );
+  $items['admin/build/game-events/delete-test-data'] = array(
+    'page callback' => 'games_event_delete_test_data',
+    'access callback' => 'user_access',
+    'access arguments' => array('admin game event logging'),
+    'title' => 'Delete test data',
+    'type' => MENU_LOCAL_TASK
+  );
+  */
+  $items['admin/build/game-events/type/%'] = array(
+    'page callback' 	=> 'drupal_get_form',
+    'page arguments' 	=> array('game_event_logging_event_type_form',4),
+    'access callback' 	=> 'user_access',
+    'access arguments' 	=> array('admin game event logging'),
+    'title' 			=> 'Edit Event Type',
+    'description'		=> 'Add information to a selected event type.',
+    'type' 				=>  MENU_CALLBACK
+  );
+  $items['admin/build/game-events/type/%/edit'] = array(
+    'page callback' 	=> 'drupal_get_form',
+    'page arguments' 	=> array('game_event_logging_event_type_form', 4),
+    'access callback' 	=> 'user_access',
+    'access arguments' 	=> array('admin game event logging'),
+    'title' 			=> 'Edit Event Type',
+    'description'		=> 'Add information to a selected event type.',
+    'type' 				=>  MENU_DEFAULT_LOCAL_TASK
+  );
+  //Delete event type path
+  $items['admin/build/game-events/type/%/delete'] = array(
+    'page callback' 	=> 'drupal_get_form',
+    'page arguments' 	=> array('game_event_logging_type_delete_check', 4),
+    'access callback' 	=> 'user_access',
+    'access arguments' 	=> array('admin game event logging'),
+    'title' 			=> 'Delete Event Type',
+    'description'		=> 'Delete a selected event type.',
+    'type' 				=>  MENU_CALLBACK
+  );
+  return $items;
+}
+
+/**
+ * Form to edit the info for a stat.  Addes the ability to give the stat a name and description.
+ * If type enum setup the enum values title and description for each enum value related to the stat. 
+ */
+function game_event_logging_event_type_form(&$form_state, $etid) {
+  $event_type = _game_event_logging_load_event_type($etid);
+  $token_keys = game_event_logging_get_params_by_etid($etid);
+  foreach($token_keys as $idx => $name) {
+    $tokens[] = '%'.$name;
+  }
+
+  if(isset($tokens)) {
+    $tokens = implode(', ',$tokens);
+    $tokens = 'The tokens you can use when constructing the format are: '.$tokens;
+  }
+  
+  $form['#tree'] = TRUE;
+  $form['etid'] = array(
+    '#type' => 'value',
+    '#value' => $etid,
+  );
+  $form['name'] = array(
+    '#type' => 'textfield',
+    '#title' => 'Administrative name',
+    '#description' => 'The name used to refer to this event in code',
+    '#default_value' => $event_type['name'],
+    '#disabled' => TRUE
+  );
+  $form['title'] = array(
+    '#type' => 'textfield',
+    '#title' => t('Title'),
+    '#description' => t('Name of the event type displayed to users.'),
+    '#default_value' => $event_type['title'],
+  );
+  $form['description'] = array(
+    '#type' => 'textarea',
+    '#title' => t('Description'),
+    '#description' => t('A description of the event type.'),
+    '#default_value' => $event_type['description'],
+  );
+  $form['format'] = array(
+    '#type' => 'textarea',
+    '#title' => t('Format'),
+    '#description' => t('The format to use when the event type gets viewed.  <br /><em>@s</em>', array('@s' => $tokens)),
+    '#default_value' => $event_type['format'],
+  );
+  $form['buttons']['save'] = array(
+    '#type' => 'submit',
+    '#value' => t('Save'),
+    '#attributes' => array('class' => 'form-graphic-button save-button', 'title' => 'Save'),
+    '#prefix' => '<div class="form-button-wrapper save-button">',
+    '#suffix' => '</div>',
+  );
+  $form['buttons']['delete'] = array(
+    '#type' => 'submit',
+    '#value' => t('Delete'),
+    '#attributes' => array('class' => 'form-graphic-button delete-button', 'title' => 'Delete'),
+    '#prefix' => '<div class="form-button-wrapper delete-button">',
+    '#suffix' => '</div>',
+  );
+  return $form;
+}
+
+function game_event_logging_event_type_form_submit($form_id, &$form_state) {
+  switch($form_state['values']['op']) {
+    case 'Delete':
+      $path = 'admin/content/game-events/'.$form_state['values']['etid'].'/delete';
+      unset($_REQUEST['destination']);
+      drupal_goto($path);
+      break;
+    case 'Save':
+      $etid = $form_state['values']['etid'];
+      $title = $form_state['values']['title'];
+      $description = $form_state['values']['description'];
+      $format = $form_state['values']['format'];
+      _game_event_logging_update_event_type($etid, $title, $description, $format);
+      break;
+  }
+}
+
+/**
+ * Menu callback -- ask for confirmation of event type deletion
+ */
+function game_event_logging_type_delete_check(&$form_state, $etid) {
+  $event = db_fetch_array(db_query('SELECT name, title FROM {game_event_type} WHERE etid = %d', $etid));
+  if($event['title'] === NULL)
+    $name = $event['name'];
+  else
+    $name = $event['title'];
+
+  $form['etid'] = array(
+    '#type' => 'value',
+    '#value' => $etid,
+  );
+  
+  return confirm_form(
+          $form,
+          t('Are you sure you want to delete %name ?', array('%name' => $name)),
+          'admin/content/game-events/'.$etid,
+          t('This action cannot be undone.'),
+          t('Delete'),
+          t('Cancel')
+          );
+}
+
+function _games_event_settings_page() {
+  return "STUB";
+}
+
+/**
+ * Submit function of the confirm_form to delete event types.
+ */
+function game_event_logging_type_delete_check_submit($form, &$form_state) {
+  if ($form_state['values']['confirm'])
+    _game_event_logging_delete_event_type($form_state['values']['etid']);
+  $form_state['redirect'] = 'admin/content/game-events';
+}
+
+/**
+ * Implementation of hook_views_api().
+ */
+function game_event_logging_views_api() {
+  return array(
+    'api' => 2,
+    'path' => drupal_get_path('module', 'game_event_logging') .'/views',
+  );
+}
+
+function game_event_logging_game_stats_start_game_settings($game_id) {
+  $event_enabled = user_access('use game event logging');
+  $options = array(
+    'events_enabled' => $event_enabled,
+  );
+  return $options;
+}
+
+// -------------------------------------  REQUIRED FOR Drupal 6.x installations (by services) ------------------------------------- //
+/*
+ * Implementation of hook_enable()
+ * Perform necessary actions after module is enabled. (like clear the services:methods cache)
+ */
+function game_event_logging_enable() {
+  cache_clear_all('services:methods', 'cache');
+}
+
+/*
+ * Implementation of hook_disable()
+ * Perform necessary actions before module is disabled. (like clear the services:methods cache)
+ */
+function game_event_logging_disable() {
+  cache_clear_all('services:methods', 'cache');
+}

@@ -1,0 +1,54 @@
+<?php
+/**
+ * Implementation of hook_install().
+ */
+function game_save_install() {
+  // Create tables.
+  drupal_install_schema('game_save');
+}
+
+/**
+ * Implementation of hook_uninstall().
+ */
+function game_save_uninstall() {
+  // Remove tables.
+  drupal_uninstall_schema('game_save');
+}
+
+/**
+ * Implementation of hook_schema().
+ */
+function game_save_schema() {
+  $schema = array();
+  $schema['games_saves'] = array(
+    'description' => 'Stores user game saves',
+    'fields' =>  array(
+      'gsid' => array(
+        'type' => 'int',
+        'unsigned' => TRUE,
+        'not null' => TRUE,
+        'description' => 'Game session id'
+      ),
+      'modified_date' => array(
+        'type' => 'int',
+        'unsigned' => TRUE,
+        'not null' => TRUE,
+        'description' => 'Time game was saved'
+      ),
+      'save_data' => array(
+        'type' => 'blob',
+        'size' => 'big',
+        'not null' => TRUE,
+        'description' => 'The saved data'
+      ),
+      'format' => array(
+        'type' => 'int',
+        'unsigned' => TRUE,
+        'not null' => TRUE,
+        'description' => 'The format/version of the saved data'
+      )
+    ),
+    'primary key' => array('gsid'),
+  );
+  return $schema;
+}

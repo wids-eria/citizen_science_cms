@@ -1,0 +1,585 @@
+<?php
+require_once('game_stats.module');
+
+/**
+ * Implementation of hook_install().
+ */
+function game_stats_install() {
+	// Create tables.
+	drupal_install_schema('game_stats');
+	//_game_stats_sync();
+}
+
+/**
+ * Implementation of hook_uninstall().
+ */
+function game_stats_uninstall() {
+	// Remove tables.
+	drupal_uninstall_schema('game_stats');
+}
+
+/**
+ * Implementation of hook_schema().
+ */
+function game_stats_schema() {
+  $schema = array();
+
+  $schema['games_game_session_users'] = array(
+      'description' => 'Stores the single game session of the user.',
+      'fields' =>  array(
+          'gsid' => array(
+              'type' => 'int',
+              'unsigned' => TRUE,
+              'not null' => TRUE,
+              'description' => 'gsid linked to the user id'
+          ),
+          'uid' => array(
+              'type' => 'int',
+              'unsigned' => TRUE,
+              'not null' => TRUE,
+              'description' => 'user id'
+          ),
+          'score' => array(
+              'type' => 'int',
+              'not null' => TRUE,
+              'description' => 'score of the game'
+          ),
+      ),
+      'primary key' => array('gsid', 'uid'),
+      'indexes' => array(
+          'uid' => array('uid'),
+          'gsid' => array('gsid'),
+      ),
+  );
+  $schema['games_game_session'] = array(
+      'description' => 'Stores the single game session of the user.',
+      'fields' =>  array(
+          'gsid' => array(
+              'type' => 'serial',
+              'unsigned' => TRUE,
+              'not null' => TRUE,
+              'description' => 'auto created game session id'
+          ),
+          'game_id' => array(
+              'type' => 'int',
+              'unsigned' => TRUE,
+              'not null' => TRUE,
+              'description' => 'game id'
+          ),
+          'complete' => array(
+              'type' => 'int',
+              'size' => 'tiny',
+              'unsigned' => TRUE,
+              'not null' => TRUE,
+              'description' => 'if game is completed or not'
+          ),
+          'start_time' => array(
+              'type' => 'int',
+              'unsigned' => TRUE,
+              'not null' => TRUE,
+              'description' => 'time game started'
+          ),
+          'end_time' => array(
+              'type' => 'int',
+              'unsigned' => TRUE,
+              'description' => 'time game ended'
+          ),
+      ),
+      'primary key' => array('gsid'),
+      'indexes' => array(
+          'game_id' => array('game_id'),
+          'complete' => array('complete'),
+      ),
+  );
+  $schema['games_play_session'] = array(
+      'description' => 'Store the play session of the user.',
+      'fields' => array(
+          'psid' => array(
+              'type' => 'serial',
+              'unsigned' => TRUE,
+              'not null' => TRUE,
+              'description' => 'auto created play session id'
+          ),
+          'game_id' => array(
+              'type' => 'int',
+              'unsigned' => TRUE,
+              'not null' => TRUE,
+              'description' => 'game id'
+          ),
+          'session_id' => array(
+              'type' => 'varchar',
+              'length' => 65,
+              'not null' => TRUE,
+              'description' => 'session id'
+          ),
+          'start_time' => array(
+              'type' => 'int',
+              'unsigned' => TRUE,
+              'not null' => TRUE,
+              'description' => 'time game started'
+          ),
+          'end_time' => array(
+              'type' => 'int',
+              'unsigned' => TRUE,
+              'description' => 'time game ended'
+          ),
+          'version' => array(
+              'type' => 'varchar',
+              'length' => 45,
+              'not null' => TRUE,
+              'description' => 'version of game'
+          ),
+          'gsid' => array(
+              'type' => 'int',
+              'unsigned' => TRUE,
+              'not null' => TRUE,
+              'description' => 'game session id'
+          ),
+          'closed' => array(
+              'type' => 'int',
+              'size' => 'tiny',
+              'unsigned' => TRUE,
+              'not null' => TRUE,
+              'description' => 'if play session is closed or not'
+          ),
+          'uid' => array(
+              'type' => 'int',
+              'unsigned' => TRUE,
+              'not null' => TRUE,
+              'description' => 'user id'
+          ),
+      ),
+      'primary key' => array('psid'),
+      'indexes' => array(
+          'gsid' => array('gsid'),
+      ),
+  );
+
+  $schema['games_stats'] = array(
+      'description' => 'Stores the stats that will be tracked.',
+      'fields' => array(
+          'sid' => array(
+              'type' => 'serial',
+              'unsigned' => TRUE,
+              'not null' => TRUE,
+              'description' => 'auto created play session id'
+          ),
+          'game_id' => array(
+              'type' => 'int',
+              'unsigned' => TRUE,
+              'not null' => TRUE,
+              'description' => 'game id'
+          ),
+          'admin_name' => array(
+              'type' => 'varchar',
+              'length' => 60,
+              'not null' => TRUE,
+              'description' => 'admin name for the stat'
+          ),
+          'name' => array(
+              'type' => 'varchar',
+              'length' => 60,
+              'description' => 'stat name.  used to display to the public'
+          ),
+          'description' => array(
+              'type' => 'text',
+              'description' => 'description of the stat'
+          ),
+          'stat_type' => array(
+              'type' => 'varchar',
+              'length' => 20,
+              'not null' => TRUE,
+              'description' => 'stat type'
+          ),
+          'hidden' => array(
+              'type' => 'int',
+              'size' => 'tiny',
+              'unsigned' => TRUE,
+              'not null' => TRUE,
+              'description' => 'check if the stat is hidden on the stats page'
+          ),
+          'weight' => array(
+              'type' => 'int',
+              'unsigned' => TRUE,
+              'not null' => TRUE,
+              'description' => 'weight of the stats disply page when ordering the stats'
+          ),
+      ),
+      'primary key' => array('sid'),
+      'indexes' => array(
+          'game_id' => array('game_id'),
+      ),
+  );
+  //TODO: add uid to all stat tables
+  $schema['games_enum_stat'] = array(
+      'description' => 'Stores the enumerator stats',
+      'fields' => array(
+          'user_stat_id' => array(
+              'type' => 'serial',
+              'unsigned' => TRUE,
+              'not null' => TRUE,
+              'description' => 'auto created enum stat id'
+          ),
+          'sid' => array(
+              'type' => 'int',
+              'unsigned' => TRUE,
+              'not null' => TRUE,
+              'description' => 'foreign key from the stats table',
+          ),
+          'gsid' => array(
+              'type' => 'int',
+              'unsigned' => TRUE,
+              'not null' => TRUE,
+              'description' => 'foreign key from the game session table',
+          ),
+          'value' => array(
+              'type' => 'int',
+              'unsigned' => TRUE,
+              'not null' => TRUE,
+              'description' => 'refers to a value on the enum tables',
+          ),
+          'uid' => array(
+              'type' => 'int',
+              'unsigned' => TRUE,
+              'description' => 'user id'
+          ),
+      ),
+      'primary key' => array('user_stat_id'),
+      'indexes' => array(
+          'gsid' => array('gsid'),
+          'sid' => array('sid'),
+          'uid' => array('uid'),
+      ),
+  );
+  $schema['games_count_stat'] = array(
+      'description' => 'Stores the count stats',
+      'fields' => array(
+          'user_stat_id' => array(
+              'type' => 'serial',
+              'unsigned' => TRUE,
+              'not null' => TRUE,
+              'description' => 'auto created count stat id'
+          ),
+          'sid' => array(
+              'type' => 'int',
+              'unsigned' => TRUE,
+              'not null' => TRUE,
+              'description' => 'foreign key from the stats table',
+          ),
+          'gsid' => array(
+              'type' => 'int',
+              'unsigned' => TRUE,
+              'not null' => TRUE,
+              'description' => 'foreign key from the game session table',
+          ),
+          'value' => array(
+              'type' => 'float',
+              'not null' => TRUE,
+              'description' => 'count stat',
+          ),
+          'uid' => array(
+              'type' => 'int',
+              'unsigned' => TRUE,
+              'description' => 'user id'
+          ),
+      ),
+      'primary key' => array('user_stat_id'),
+      'indexes' => array(
+          'gsid' => array('gsid'),
+          'sid' => array('sid'),
+          'uid' => array('uid'),
+      ),
+  );
+  $schema['games_serializable_stat'] = array(
+      'description' => 'Stores the serializable stats',
+      'fields' => array(
+          'user_stat_id' => array(
+              'type' => 'serial',
+              'unsigned' => TRUE,
+              'not null' => TRUE,
+              'description' => 'auto created serializable stat id'
+          ),
+          'sid' => array(
+              'type' => 'int',
+              'unsigned' => TRUE,
+              'not null' => TRUE,
+              'description' => 'foreign key from the stats table',
+          ),
+          'gsid' => array(
+              'type' => 'int',
+              'unsigned' => TRUE,
+              'not null' => TRUE,
+              'description' => 'foreign key from the game session table',
+          ),
+          'value' => array(
+              'type' => 'text',
+              'size' => 'big',
+              'not null' => TRUE,
+              'serialize' => TRUE,
+              'description' => 'serializable data that can be used as stats',
+          ),
+          'uid' => array(
+              'type' => 'int',
+              'unsigned' => TRUE,
+              'description' => 'user id'
+          ),
+      ),
+      'primary key' => array('user_stat_id'),
+      'indexes' => array(
+          'gsid' => array('gsid'),
+          'sid' => array('sid'),
+          'uid' => array('uid'),
+      ),
+  );
+  $schema['games_label_stat'] = array(
+      'description' => 'Stores the label stats',
+      'fields' => array(
+          'user_stat_id' => array(
+              'type' => 'serial',
+              'unsigned' => TRUE,
+              'not null' => TRUE,
+              'description' => 'auto created label stat id'
+          ),
+          'sid' => array(
+              'type' => 'int',
+              'unsigned' => TRUE,
+              'not null' => TRUE,
+              'description' => 'foreign key from the stats table',
+          ),
+          'gsid' => array(
+              'type' => 'int',
+              'unsigned' => TRUE,
+              'not null' => TRUE,
+              'description' => 'foreign key from the game session table',
+          ),
+          'value' => array(
+              'type' => 'varchar',
+              'length' => 255,
+              'not null' => TRUE,
+              'description' => 'label stat',
+          ),
+          'uid' => array(
+              'type' => 'int',
+              'unsigned' => TRUE,
+              'description' => 'user id'
+          ),
+      ),
+      'primary key' => array('user_stat_id'),
+      'indexes' => array(
+          'gsid' => array('gsid'),
+          'sid' => array('sid'),
+          'uid' => array('uid'),
+      ),
+  );
+  $schema['games_enum'] = array(
+      'description' => 'Stores string enumerator values',
+      'fields' => array(
+          'eid' => array(
+              'type' => 'serial',
+              'unsigned' => TRUE,
+              'not null' => TRUE,
+              'description' => 'key for the enumerators',
+          ),
+          'sid' => array(
+              'type' => 'int',
+              'unsigned' => TRUE,
+              'not null' => TRUE,
+              'description' => 'stats id',
+          ),
+          'value' => array(
+              'type' => 'varchar',
+              'length' => 65,
+              'not null' => TRUE,
+              'description' => 'enum value',
+          ),
+          'title' => array(
+              'type' => 'varchar',
+              'length' => 255,
+              'not null' => FALSE,
+              'description' => 'enum title',
+          ),
+          'description' => array(
+              'type' => 'text',
+              'not null' => FALSE,
+              'description' => 'enum description',
+          ),
+      ),
+      'primary key' => array('eid'),
+      'indexes' => array(
+          'sid'	=> array('sid'),
+      ),
+  );
+  $schema['games_game_id'] = array(
+      'description' => 'Creates the game_id with relation to the auth key.',
+      'fields' => array(
+          'game_id' => array(
+              'type' => 'serial',
+              'unsigned' => TRUE,
+              'not null' => TRUE,
+              'description' => 'auto generated id for a specific game',
+          ),
+          'kid' => array(
+              'type' => 'varchar',
+              'length' => 32,
+              'not null' => TRUE,
+              'description' => 'authorization key created by the services keyauth module',
+          ),
+      ),
+      'primary key' => array('game_id'),
+      'indexes' => array(
+          'kid'	=> array('kid'),
+      ),
+  );
+  return $schema;
+}
+
+function game_stats_update_1() {
+  $ret = array();
+  $table_name = 'games_tracking_settings';
+  $table = drupal_get_schema($table_name);
+  
+  db_create_table($ret, $table_name, $table);
+  return $ret;
+}
+
+function game_stats_update_2() {
+  $ret = array();
+  
+  $table_name = 'games_stats';
+  $table = drupal_get_schema($table_name);
+  
+  $table['fields']['weight']['initial'] = 0;
+  $table['fields']['hidden']['initial'] = 0;
+  
+  db_drop_field($ret, $table_name, 'settings');
+  db_add_field($ret, $table_name, 'weight', $table['fields']['weight']);
+  db_add_field($ret, $table_name, 'hidden', $table['fields']['hidden']);
+
+  return $ret;
+}
+
+function game_stats_update_3() {
+  $ret = array();
+  db_drop_table($ret, 'games_current_game_session');
+  return $ret;
+}
+
+function game_stats_update_4() {
+  $ret = array();
+  
+  $table_name = 'games_enum';
+  $table = drupal_get_schema($table_name);
+  
+  db_add_field($ret, $table_name, 'title', $table['fields']['title']);
+  db_add_field($ret, $table_name, 'description', $table['fields']['description']);
+  
+  return $ret;
+}
+
+function game_stats_update_5() {
+  $ret = array();
+
+  //Add uid to play session table
+  $table_name_1 = 'games_play_session';
+  $table_1 = drupal_get_schema($table_name_1, TRUE);
+  db_add_field($ret, $table_name_1, 'uid', $table_1['fields']['uid']);
+  db_query('UPDATE {games_play_session} ps, {games_game_session} gs SET ps.uid = gs.uid
+            WHERE ps.gsid = gs.gsid');
+
+  //Add uid to stat tables
+  $table_name_2 = 'games_count_stat';
+  $table_2 = drupal_get_schema($table_name_2, TRUE);
+  db_add_field($ret, $table_name_2, 'uid', $table_2['fields']['uid']);
+  db_query('UPDATE {games_count_stat} cs, {games_game_session} gs SET cs.uid = gs.uid
+            WHERE cs.gsid = gs.gsid');
+
+  $table_name_3 = 'games_enum_stat';
+  $table_3 = drupal_get_schema($table_name_3, TRUE);
+  db_add_field($ret, $table_name_3, 'uid', $table_3['fields']['uid']);
+  db_query('UPDATE {games_enum_stat} es, {games_game_session} gs SET es.uid = gs.uid
+            WHERE es.gsid = gs.gsid');
+
+  $table_name_4 = 'games_serializable_stat';
+  $table_4 = drupal_get_schema($table_name_4, TRUE);
+  db_add_field($ret, $table_name_4, 'uid', $table_4['fields']['uid']);
+  db_query('UPDATE {games_serializable_stat} ss, {games_game_session} gs SET ss.uid = gs.uid
+            WHERE ss.gsid = gs.gsid');
+
+  $table_name_5 = 'games_label_stat';
+  $table_5 = drupal_get_schema($table_name_5, TRUE);
+  db_add_field($ret, $table_name_5, 'uid', $table_5['fields']['uid']);
+  db_query('UPDATE {games_label_stat} ls, {games_game_session} gs SET ls.uid = gs.uid
+            WHERE ls.gsid = gs.gsid');
+
+  //Split game session table into two tables.
+  $table_name_6 = 'games_game_session_users';
+  $table_6 = drupal_get_schema($table_name_6, TRUE);
+  db_create_table($ret, $table_name_6, $table_6);
+
+  $sessions_query = db_query('SELECT gsid, uid, score FROM {games_game_session} ORDER BY gsid ASC');
+  while($row = db_fetch_array($sessions_query)) {
+    drupal_write_record('games_game_session_users', $row);
+  }
+
+  if(db_table_exists($table_name_6)) {
+    db_drop_index($ret, 'games_game_session', 'uid');
+    db_drop_field($ret, 'games_game_session', 'uid');
+    db_drop_field($ret, 'games_game_session', 'score');
+  }
+  return $ret;
+}
+
+function game_stats_update_6() {
+  $table = 'games_game_session_users';
+  $fields = array('uid');
+  db_add_primary_key(&$ret, $table, $fields);
+
+  return $ret;
+}
+
+function game_stats_update_7() {
+  $fields = 'user_stat_id';
+
+  //add new column and make it the soul primary key
+  $table_name_1 = 'games_count_stat';
+  $table_1 = drupal_get_schema($table_name_1, TRUE);
+  db_drop_primary_key($ret, $table_name_1);
+  db_add_field($ret, $table_name_1, 'user_stat_id', $table_1['fields']['user_stat_id'], array('primary key' => array('user_stat_id')));
+  db_add_index($ret, $table_name_1, 'gsid', array('gsid'));
+
+  $table_name_2 = 'games_enum_stat';
+  $table_2 = drupal_get_schema($table_name_2, TRUE);
+  db_drop_primary_key($ret, $table_name_2);
+  db_add_field($ret, $table_name_2, 'user_stat_id', $table_2['fields']['user_stat_id'], array('primary key' => array('user_stat_id')));
+  db_add_index($ret, $table_name_2, 'gsid', array('gsid'));
+
+  $table_name_3 = 'games_serializable_stat';
+  $table_3 = drupal_get_schema($table_name_3, TRUE);
+  db_drop_primary_key($ret, $table_name_3);
+  db_add_field($ret, $table_name_3, 'user_stat_id', $table_3['fields']['user_stat_id'], array('primary key' => array('user_stat_id')));
+  db_add_index($ret, $table_name_3, 'gsid', array('gsid'));
+
+  $table_name_4 = 'games_label_stat';
+  $table_4 = drupal_get_schema($table_name_4, TRUE);
+  db_drop_primary_key($ret, $table_name_4);
+  db_add_field($ret, $table_name_4, 'user_stat_id', $table_4['fields']['user_stat_id'], array('primary key' => array('user_stat_id')));
+  db_add_index($ret, $table_name_4, 'gsid', array('gsid'));
+
+  return $ret;
+}
+
+function game_stats_update_8() {
+	db_drop_table($ret, 'games_tracking_settings');
+	return $ret;
+}
+
+function game_stats_update_9() {
+  $ret = array();
+
+  $table = 'games_game_session_users';
+  $fields = array('uid','gsid');
+  db_drop_primary_key($ret, $table);
+  db_add_primary_key(&$ret, $table, $fields);
+
+  return $ret;
+}

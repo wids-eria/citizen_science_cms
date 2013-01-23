@@ -1,0 +1,16 @@
+Unzip and import the SQL into a new MySQL database
+
+Copy htdocs/sites/default/default.settings.php to htdocs/sites/default/settings.php
+Update the db connection information in settings.php
+
+Copy htdocs/phpma/config.sample.inc.php to htdocs/phpma/config.inc.php
+Set cookie secret in config.inc.php
+
+Visit the site and log in as U:admin/P:admin
+Change password.
+
+Obtain copy of flash game, place in sites/default/files/games/CitizenScience/
+Edit Settings.xml
+change drupalService/url to point to http://<url of site>/services/amfphp
+
+kevin@learninggamesnetwork

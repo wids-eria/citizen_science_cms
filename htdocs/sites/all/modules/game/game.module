@@ -1,0 +1,443 @@
+<?php
+/**
+ * Implementation of hook_node_info
+ * @return unknown_type
+ */
+function game_node_info() {
+	return array(
+		'flash_game' => array(
+			'name' => t('Flash Game'),
+			'module' => 'game',
+			'description' => t("Host an Adobe Flash game")
+		),
+	);
+}
+
+/**
+ * Implementation of hook_perm
+ */
+function game_perm() {
+     $perms[] = 'create game';
+     $perms[] = 'delete own game';
+     $perms[] = 'delete any game';
+     $perms[] = 'edit own game';
+     $perms[] = 'edit any game';
+     $perms[] = 'administer games';
+     return $perms;
+}
+
+/**
+ * Implementation of hook_access
+ * @param $op
+ * @param $node
+ * @param $account
+ */
+function game_access($op, $node, $account) {
+  switch ($op) {
+    case 'create':
+      // Anonymous users cannot post even if they have the permission. 
+      return user_access('create game', $account) && $account->uid ? TRUE : NULL;
+    case 'update':
+      return user_access('edit any game', $account) || (user_access('edit own game', $account) && ($node->uid == $account->uid)) ? TRUE : NULL;
+    case 'delete':
+      return user_access('delete any game', $account) || (user_access('delete own game', $account) && ($node->uid == $account->uid)) ? TRUE : NULL;
+  }	
+}
+
+/**
+ * Implementation of hook_menu
+ */
+function game_menu() {
+  $items = array();
+  
+  $items['game/popout/%node'] = array(
+    'page callback' => '_flash_game_popout',
+    'page arguments' => array(2),
+    'title callback' => 'node_page_title',
+    'title arguments' => array(2),
+    'access callback' => 'node_access',
+    'access arguments' => array('view', 2),
+    'type' => MENU_CALLBACK
+  );
+
+  $items['admin/settings/game'] = array(
+    'title' => 'Game settings',
+    'page callback' => 'drupal_get_form',
+    'page arguments' => array('game_settings_form'),
+    'access callback' => 'user_access',
+    'access arguments' => array('administer games'),
+    'type' => MENU_NORMAL_ITEM
+  );
+
+  //Clean game pages.
+  $items['games-export/%node'] = array(
+    'page callback' => '_game_plain_game_page',
+    'page arguments' => array(1),
+    'access callback' => TRUE,
+    'title' => 'External Game Path',
+    'type' => MENU_NORMAL_ITEM
+  );
+
+  return $items;
+}
+
+//Clean view of the game with no surounding fluff.
+function _game_plain_game_page($node) {
+  $node->external = TRUE;
+  return node_view($node);
+}
+
+function game_settings_form(&$form_state) {
+	$form = array();
+	$form['show_new_window'] = array(
+		'#type' => 'checkbox',
+		'#title' => t('Show open in new window link'),
+		'#default_value' => variable_get('game_show_new_window', TRUE)
+	);
+	
+	$form['submit'] = array(
+		'#type' => 'submit',
+		'#value' => t('Submit')
+	);
+	
+	return $form;
+}
+
+function game_settings_form_submit(&$form, &$form_state) {
+	variable_set('game_show_new_window', $form_state['values']['show_new_window']);
+}
+
+
+/**
+ * Implementation of hook_content_extra_fields
+ */
+function game_content_extra_fields($type_name) {
+	switch($type_name) {
+		case 'flash_game':
+			$extras['main_swf'] = array(
+				'label' => 'Main swf',
+				'description' => 'Location of the main game swf'
+			);
+			$extras['min_version'] = array(
+				'label' => 'Min version',
+				'description' => 'Minimum Flash Player version. '
+			);
+			$extras['parameters'] = array(
+				'label' => 'Parameters',
+				'description' => 'Flash parameters'
+			);
+		break;
+	}
+	
+	return $extras;
+}
+
+
+/**
+ * Implementation of hook_theme
+ * @return unknown_type
+ */
+function game_theme() {
+	return array(
+	    'flash_game_embed' => array(
+	      'arguments' => array('nid' => NULL, 'movie' => NULL, 'query' => NULL, 'embed_params' => array(), 'popout' => FALSE),
+	      ),
+	);	
+}
+
+/**
+ * Implementation of hook_form
+ * @param $node
+ * @param $node_state
+ * @return unknown_type
+ */
+function game_form(&$node, &$node_state) {
+	$node_type = node_get_types('type', $node);
+	$form = array();
+	
+	if ($node_type->has_title) {
+		$form['title'] = array(
+	      '#type' => 'textfield',
+	      '#title' => check_plain($node_type->title_label),
+	      '#required' => TRUE,
+	      '#default_value' => $node->title,
+	      '#weight' => -5,
+		);
+	}
+
+	if ($node_type->has_body) {
+		$form['body_field'] = node_body_field($node, $node_type->body_label, $node_type->min_word_count);
+	}
+
+	$form['main_swf'] = array(
+		'#type' => 'textfield',
+		'#title' => t('Main swf'),
+		'#required' => TRUE,
+		'#default_value' => $node->main_swf,
+		'#description' => t('Location of the main game swf relative to the files directory'),
+		'#element_validate' => array('checking_file_validate')
+	);
+	$form['min_version'] = array(
+		'#type' => 'textfield',
+		'#maxlength' => 32,
+		'#title' => t('Min version'),
+		'#required' => TRUE,
+		'#description' => t('Minimum Flash Player version.  Format: #.#.#'),
+		'#default_value' => isset($node->min_version) ? $node->min_version : '10.0.0', 
+		'#element_validate' => array('min_version_validate')
+	);
+	
+	$form['dimensions'] = array(
+		'#type' => 'fieldset',
+		'#title' => 'Dimensions',
+		'#collapsible' => TRUE,
+		'#collapsed' => TRUE
+	);
+	
+	$form['dimensions']['original_width'] = array(
+		'#type' => 'textfield',
+		'#maxlength' => 32,
+		'#title' => t('Width'),
+		'#required' => TRUE,
+		'#description' => t('Original width'),
+		'#default_value' => $node->original_width
+	);
+
+	$form['dimensions']['original_height'] = array(
+		'#type' => 'textfield',
+		'#maxlength' => 32,
+		'#title' => t('Height'),
+		'#required' => TRUE,
+		'#description' => t('Original height'),
+		'#default_value' => $node->original_height
+	);	
+	
+	$form['parameters'] = array(
+		'#type' => 'fieldset',
+		'#title' => 'Parameters',
+		'#collapsible' => TRUE,
+		'#collapsed' => TRUE
+	);
+	
+	$form['parameters']['flashvars'] = array(
+		'#type' => 'textfield',
+		'#maxlength' => 255,
+		'#title' => t('Flashvars'),
+		'#default_value' => $node->flashvars,
+		'#description' => t('Enter Flashvars in the form <em>name=value&name2=value2</em>')
+	);
+	
+	$form['parameters']['query'] = array(
+		'#type' => 'textfield',
+		'#maxlength' => 255,
+		'#title' => t('Query parameters'),
+		'#default_value' => $node->query,
+		'#description' => t('Enter query parameters in the form <em>name=value&name2=value2</em>')
+	);
+	
+	return $form;
+}
+
+/**
+ * Implementation of hook_validate
+ * @param $element
+ * @param $form_state
+ * @return unknown_type
+ */
+function checking_file_validate($element, &$form_state) {
+	/*
+	$regex = '/^([-\w])([-\w]|\/)*([\w])\.[s][w][f]$/';
+	$matches = array();
+	$result = preg_match($regex , $form_state['values']['main_swf'], $matches);
+	
+	if($result == 0) {
+		form_set_error('main_swf', t('The path is invalid'));
+		return;
+	}
+	*/
+	
+	$filePath = $form_state['values']['main_swf'];
+	if(!file_exists(file_directory_path(). '/' . $filePath)) {
+		form_set_error('main_swf',t('The file does not exist'));
+		return;
+	}
+}
+
+/**
+ * Implementation of hook_validate
+ * @param $element
+ * @param $form_state
+ * @return unknown_type
+ */
+function min_version_validate($element, &$form_state) {
+	$regex = '/^(?P<major>[\d]*)\.(?P<minor>[\d]*)\.(?P<revision>[\d]*)$/';
+	$matches = array();
+	$result = preg_match($regex , $form_state['values']['min_version'], $matches);
+
+	if($result == 0) {
+		form_set_error('min_version', t('The minimum version is invalid'));
+		return;
+	}
+	
+	if($matches['major'] < 7) {
+		form_set_error('min_version', t('The minimum version major version is too low (should be at least 9)'));
+		return;
+	}
+}
+
+/**
+ * Implementation of hook_nodeapi
+ * @param $node
+ * @param $op
+ * @param $teaser
+ * @param $page
+ * @return unknown_type
+ */
+function game_nodeapi(&$node, $op, $teaser, $page) {
+  switch($op) {
+    case 'view':
+      if($node->type == 'flash_game' && !$teaser) {
+        drupal_add_js(drupal_get_path('module', 'game') . '/game.js');
+
+        if($node->popout || $node->external) {
+          $width = '100%';
+          $height = '100%';
+        }
+        if($node->facebook_game) {
+          $width = '750px';
+          $height = '700px';
+        }
+        if(!isset($width) || !isset($height)) {
+          $width = $node->original_width;
+          $height = $node->original_height;
+        }
+        
+        //$node->popout ? '100%' : $node->original_width, $node->popout ? '100%' : $node->original_height;
+        
+        $node->content['embed'] = array(
+            '#weight' => 1,
+            '#value' => theme('flash_game_embed', $node->nid, $node->main_swf, $node->query, embed_params($node->main_swf, $node->min_version, $width, $height, $node->flashvars), $node->popout)
+        );
+      }
+      break;
+  }
+}
+
+/**
+ * Implementation of hook_link
+ * @param $type
+ * @param $object
+ * @param $teaser
+ */
+function game_link($type, $object, $teaser = FALSE) {
+	switch($type) {
+		case 'node':
+			switch($object->type) {
+				case 'flash_game':
+					if(!$teaser && variable_get('game_show_new_window', TRUE)) {
+						$links['popout'] = array('title' => 'Open in new window', 'href' => 'game/popout/' . $object->nid);
+					}
+					break;
+			}
+	}
+	return $links;
+}
+
+
+/**
+ * Implementation of hook_load
+ * @param $node
+ * @return unknown_type
+ */
+function game_load(&$node) {
+	$fields_results = db_query("SELECT * FROM {flash_game_fields} WHERE nid = %d", $node->nid);
+	$fields = db_fetch_array($fields_results);
+
+	return $fields;
+}
+
+/**
+ * Implementation of hook_update
+ * @param $node
+ * @return unknown_type
+ */
+function game_update(&$node) {
+	drupal_write_record("flash_game_fields", $node, 'nid');
+}
+
+/**
+ * Implementation of hook_insert
+ * @param $node
+ * @return unknown_type
+ */
+function game_insert(&$node) {
+	drupal_write_record("flash_game_fields", $node);
+}
+
+/**
+ * Implementation of hook_delete
+ * @param $node
+ * @return unknown_type
+ */
+function game_delete(&$node) {
+	db_query('DELETE FROM {flash_game_fields} WHERE nid = %d', $node->nid);
+}
+
+/**
+ * Generates a swftools parameter array
+ * @param $movie
+ * @param $min_version
+ * @param $width
+ * @param $height
+ * @param $flashvars
+ */
+function embed_params($movie, $min_version, $width, $height, $flashvars = NULL) {
+	$base = file_create_url(file_directory_path() . '/' . substr($movie, 0, strrpos($movie, '/') + 1)) . '/';
+
+	return array(
+		'methods' => array(
+			'action' => SWFTOOLS_SWF_DISPLAY_DIRECT
+		),
+		'params' => array(
+			'version' => $min_version,
+			'base' => $base,
+			'width' => $width,
+			'height' => $height,
+			'expressInstall' => TRUE,
+		),
+		'flashvars' => $flashvars
+	);
+}
+
+/**
+ * Generates a flash embed and includes necessary javascript
+ * @param $nid The node id
+ * @param $movie The main swf
+ * @param $query Query params to append to the movie url
+ * @param $params Embed parameters
+ * @param $popout Whether this is a popout
+ * @return unknown_type
+ */
+function theme_flash_game_embed($nid, $movie, $query, $params, $popout) {	
+	$class = 'flash-game' . ($popout ? ' popout' : '');
+	
+	if(!empty($query))
+		$movie .= '?'.$query;
+
+	return '<div id="game-'.$nid.'" class="'.$class.'">' . swf($movie, $params) . '</div>';
+}
+
+function game_preprocess_node(&$variables) {
+  if($variables['node']->popout && $variables['node']->type == 'flash_game') {
+    $variables['template_files'][] = 'node-flash_game-popout';
+  }
+}
+
+/**
+ * Display flash game in its own window
+ * @param unknown_type $node
+ */
+function _flash_game_popout($node) {
+  $node->popout = TRUE;
+  return node_view($node);
+}

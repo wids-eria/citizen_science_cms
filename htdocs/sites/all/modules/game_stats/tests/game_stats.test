@@ -1,0 +1,296 @@
+<?php
+class GameStatsTest extends DrupalWebTestCase {
+	protected $user;
+	
+	public static function getInfo() {
+		return array(
+			'name' => 'Game Stats Test',
+			'description' => 'Ensure that the game_stats module functions properly.',
+			'group' => 'Game Stats',
+		);
+	}
+	
+	public function setUp() {
+		// Enable any modules required for the test.
+		parent::setUp(
+			'services',
+			'services_keyauth',
+			'amfphp',
+			'game_stats'
+		);
+		
+		$settings1 = array();
+		
+		//Create a stat of each type
+		//enum stat type : sid 1
+		//count stat type : sid 2
+		//label stat type : sid 3
+		//serializable stat type : sid 4
+		$types = array('enum','count','serializable','label');
+		foreach($types as $type){
+			$data = array(
+				'game_id' => 1,
+				'settings' => $settings1,
+				'stat_type' => $type,
+			);
+			drupal_write_record('games_stats', $data);
+		}
+		
+		$data1 = array(
+			'game_id' => 1,
+			'settings' => $settings1,
+			'stat_type' => 'count',
+		);
+		drupal_write_record('games_stats', $data1);
+		
+		$data2 = array(
+			'game_id' => 1,
+			'settings' => $settings1,
+			'stat_type' => 'count',
+		);
+		drupal_write_record('games_stats', $data2);
+		
+		$data3 = array(
+			'sid' => 1,
+			'value' => 'Hello World!',
+		);
+		drupal_write_record('games_enum', $data3);
+		
+		//If we need a certain user logged in
+		//$this->user = $this->drupalCreateUser( array('create simpletest_example', 'edit own simpletest_example'));
+		//$this->drupalLogin($this->user);
+	}
+
+	//Test the setup of the dbs
+//	public function testInitTest(){
+//		$result1 = db_result(db_query('SELECT COUNT(settings) FROM {games_stats}'));
+//		$result2 = db_result(db_query('SELECT settings FROM {games_stats}')); 
+//
+//		$settings = unserialize($result2);
+//		
+//		$this->assertEqual($result1,6,t('Correct number of game stats.'));
+//		$this->assertTrue(is_array($settings),t('An array is being produced by the settings row in the stats table.'));
+//
+//		$test_time = _game_stats_time_diff_check(time());
+//		
+//		$this->assertEqual(time(),$test_time,t('Check time diff check function to make sure it returns proper time.'));		
+//	}
+	
+	//SESSION TESTS
+	//1-  start game twice only creates one play session and game session doesn't change / test the heartbeat interval and setting last_heartbeat time
+	//2-  (removed)start game then complete game no current game session for that user and game combination
+	//3-  start game then complete game all play sessions should be closed
+	//4-  start game then end play session, all play sessions for that game should be closed
+	//5-  start game, complete game then complete game by itself should fail
+	//6-  start game, end play session then end play session by itself should fail
+	//7-  start game, see if play session is started
+	//8-  start game, start the game again, check that there is only one game session created at the end
+	public function testGameStatsSession1(){
+		//TEST 1
+		$this->assertNoText(t('Start of test 1'));
+		$game_id = 1;
+		$version = 'v1';
+		global $user;
+		$first_settings = game_stats_start_game($game_id,$version,$time = NULL, $psid = NULL);
+		$first_psid = $first_settings['psid'];
+		$first_gsid = _game_stats_get_game_session_by_psid($first_psid);
+		
+		$second_settings = game_stats_start_game($game_id, $version, $time = NULL, $first_psid);
+		$second_psid = $second_settings['psid'];
+		$second_gsid = _game_stats_get_game_session_by_psid($second_psid);
+
+		_game_stats_set_heartbeat_time($second_psid);
+		$test_heartbeat = db_result(db_query('SELECT end_time FROM {games_play_session} WHERE psid = %d', $first_psid));
+		
+		$this->assertTrue($test_heartbeat > 0 ? TRUE : FALSE, t('Heartbeat is being set properly at @d.', array('@d' => $test_heartbeat)));
+		$this->assertTrue(isset($first_settings['heartbeatSec']), t('Heartbeat interval is set to @d seconds.', array('@d' => $first_settings['heartbeatSec'])));
+		$this->assertTrue(is_numeric($first_gsid),t('Check that gsid is set to a number value.'));
+		$this->assertNotEqual($first_gsid,0,t('Check that gsid is set to a valid number.'));
+	}
+	
+	public function testGameStatsSession2(){
+		//TEST 2 & TEST 3
+		global $user;
+		$game_id = 1;
+		$version = 'v1';
+		$settings = game_stats_start_game($game_id, $version, $time = NULL, $psid = NULL);
+		$psid = $settings['psid'];
+		$before_gsid = _game_stats_get_game_session_by_psid($psid);
+		game_stats_complete_game($psid, 200, $stats = NULL, $time = NULL);
+		
+		
+		$test = db_result(db_query('SELECT COUNT(*) FROM {games_play_session} WHERE closed = 0 AND gsid = %d', $before_gsid));
+
+//		$result1 = db_result(db_query("SELECT game_id FROM {games_game_session} WHERE gsid = %d",$before_gsid));
+//		$result2 = db_result(db_query('SELECT end_time FROM {games_play_session} WHERE gsid = %d',$before_gsid));
+//		$result4 = db_result(db_query('SELECT end_time FROM {games_play_session} WHERE gsid = %d', $before_gsid));
+//		$this->assertNoText(t('user id: @s',array('@s' => $user->uid)));
+//		$this->assertNoText(t('before gsid: @s',array('@s' => $before_gsid)));
+//		$this->assertNoText(t('game_id value: @s',array('@s' => $result1)));
+//		$this->assertNoText(t('end time value: @s',array('@s' => $result2)));
+//		$this->assertNoText(t('current gsid: @s',array('@s' => $result3)));
+//		$this->assertNoText(t('current heartbeat: @s',array('@s' => $result4)));
+//		$this->assertNoText(t('psid value: @s',array('@s' => $psid)));
+		
+		$this->assertTrue(is_numeric($before_gsid), t('Check that game session is valid before the game is completed.'));
+		$this->assertEqual($test, 0, t('Check that ALL play sessions are closed for this game.'));
+	}
+	
+	public function testGameStatsSession3(){
+		//TEST 4
+		$game_id = 1;
+		$version = 'v1';
+		$settings1 = game_stats_start_game($game_id,$version,$time = NULL, $psid = NULL);
+		$psid1 = $settings1['psid'];
+		$settings2 = game_stats_start_game($game_id,$version,$time = NULL, $psid1);
+		$psid2 = $settings2['psid'];
+		_game_stats_close_play_sessions($game_id, $time = NULL);
+		$data = array($psid1, $psid2);
+		$test = db_result(db_query('SELECT COUNT(*) FROM {games_play_session} WHERE psid IN('.db_placeholders(array($data, 'int')).') AND closed = 0',$data));
+		
+		$this->assertEqual($test, 0, t('Check that all play sessions for the current game are closed when one of them closes.'));
+	}
+		
+	public function testGameStatsSession4(){
+		//TEST 5
+		$game_id = 1;
+		$version = 'v1';
+		$settings = game_stats_start_game($game_id,$version,$time = NULL, $psid = NULL);
+		$psid = $settings['psid'];
+		_game_stats_set_heartbeat_time($psid);
+		game_stats_complete_game($psid, 120, $stats1, $time = NULL);
+		game_stats_complete_game($psid, 120, $stats1, $time = NULL);
+		$test = db_affected_rows();
+
+		//Exception should be hit
+		$this->error(t('Check that the complete game function will not work if the game was already completed.  An execption was passed.'));
+		//$this->assertEqual($test, 0, t('Check that the complete game function will not work if the game was already completed.'));
+	}
+		
+	public function testGameStatsSession5(){
+		//TEST 6
+		$game_id = 1;
+		$version = 'v1';
+		$settings = game_stats_start_game($game_id,$version,$time = NULL, $psid = NULL);
+		$psid = $settings['psid'];
+		_game_stats_set_heartbeat_time($psid);
+		game_stats_complete_game($psid, 120, $stats1, $time = NULL);
+		game_stats_end_play_session($psid);
+		$test = db_affected_rows();
+		
+		$this->assertEqual($test, 0, t('Check that the end play session function will not work if the session was already ended.'));
+	}
+	
+	public function testGameStatsSession6(){
+		//TEST 7
+		$game_id = 1;
+		$version = 'v1';
+		$settings = game_stats_start_game($game_id,$version,$time = NULL, $psid = NULL);
+		$psid = $settings['psid'];
+		$test = ($psid > 0);
+		
+		$this->assertTrue($test,t('Created psid on start game is a valid value. psid: @d',array('@d' => $psid)));
+	}
+	
+	public function testGameStatsSession7(){
+		//TEST 8
+		GLOBAL $user;
+		$game_id = 1;
+		$version = 'v1';
+		game_stats_start_game($game_id, $version, $time = NULL, $psid = NULL);
+		game_stats_start_game($game_id, $version, $time = NULL, $psid = NULL);
+		
+		$current_gsid = db_result(db_query("SELECT gsid FROM {games_game_session}"));
+		$this->assertEqual($current_gsid, 1, t('When another game session is opened before an old one is closed us old game session.'));
+	}
+	
+	//STAT TESTS
+	//1-  start game, complete game, then stat save should fail
+	//2*  start game then stat save should pass - handled by other stat saves
+	//3-  start game then save enum stat
+	//4-  start game then save numeric stat
+	//5-  start game then save serialized stat
+	//6-  start game then save label stat
+	//7-  start game then save enum stat, check if in enum table - handled in test 3
+	//8-  start game then save enum stat, save enum stat again with same value, then check that there is only one entry in table. - handled in test 3
+	//9-  start game then save numeric stat save numeric stat again to new value then check to make sure new value overwrites old. - handled in test 4
+	//10- start game then complete game with a numeric stat in the stats array, then check to make sure that the stat is set.
+	//11 register stats, then make sure the stats where created.
+	public function testGameStatsStat1(){
+		//TEST 1
+		$game_id = 1;
+		$version = 'v1';
+		global $user;
+		$settings = game_stats_start_game($game_id, $version, $time = NULL, $psid = NULL);
+		$psid = $settings['psid'];
+		$gsid = _game_stats_get_game_session_by_psid($psid);
+		_game_stats_set_heartbeat_time($psid);
+		game_stats_complete_game($psid, 200, $stats = NULL, $time = NULL);
+		$test = game_stats_save_stat($psid, 2, 200);
+		
+		//Exception should be hit
+		$this->error(t('Check that the save stat fails outside of completing a game.  An execption was passed.'));
+		//$this->assertFalse($test, t('Check that the save stat fails outside of completing a game.'));
+	}
+	
+	public function testGameStatsStat2(){
+		//TEST 3 - handles 7 and 8
+		$game_id = 1;
+		$version = 'v1';
+		global $user;
+		$settings = game_stats_start_game($game_id, $version, NULL, NULL);
+		$psid = $settings['psid'];
+		game_stats_save_stat($psid, 1, 'Heroes');
+		$value = db_result(db_query("SELECT value FROM {games_enum_stat} WHERE sid = 1"));
+		$value1 = db_result(db_query('SELECT COUNT(value) FROM {games_enum} WHERE value = "Heroes"')); //- should return 1
+		game_stats_save_stat($psid, 1, 'Heroes');
+		$value2 = db_result(db_query('SELECT COUNT(value) FROM {games_enum} WHERE value = "Heroes"')); //- should return 1
+		$this->assertTrue($value, t('Check that the save enum stat saves properly.'));
+		$this->assertEqual($value1, $value2, t('Check that the enum table doesn\'t create duplicates.'));
+		
+		//TEST 4 - handles 9
+		game_stats_save_stat($psid, 2, 200);
+		$value3 = db_result(db_query("SELECT value FROM {games_count_stat} WHERE sid = 2"));
+		game_stats_save_stat($psid, 2, 140);
+		$value4 = db_result(db_query("SELECT value FROM {games_count_stat} WHERE sid = 2"));
+		$this->assertEqual($value3, 200, t('Check that the numeric(count) stat saves properly.'));
+		$this->assertEqual($value4, 140, t('Check that second save will override the first if on the same session.'));
+		
+		//TEST 5
+		game_stats_save_stat($psid, 3, array('test'=>5));
+		$value5 = db_result(db_query("SELECT value FROM {games_serializable_stat} WHERE sid = 3"));
+		$this->assertTrue($value5, t('Check that the serizlized data saves properly.'));
+		
+		//TEST 6
+		game_stats_save_stat($psid, 4, 'Label Data');
+		$value6 = db_result(db_query("SELECT value FROM {games_label_stat} WHERE sid = 4"));
+		$this->assertTrue($value6, t('Check that the label data saves properly.'));
+		
+		//TEST 10
+		$stats = array(
+			'Hello' => array(
+				'sid' 	=> 2,
+				'value' => 240,
+			),
+		);
+		$gsid = _game_stats_get_game_session_by_psid($psid);
+		_game_stats_set_heartbeat_time($psid);
+		game_stats_complete_game($psid, 200, $stats, $time = NULL);
+		$value_complete = db_result(db_query("SELECT value FROM {games_count_stat} WHERE sid = 2 AND gsid = %d",$gsid));
+		$this->assertEqual($value_complete, 240, t('Check that the stats array passed into the complete game function sets and saves a stat properly.'));
+	}
+	
+	public function testGameStatsStat3() {
+		$stats = array(
+			'stat' => array(
+				'adminName' => 'stat_test',
+				'statType'	=> 'count',
+			),
+		);
+		game_stats_register_stats($stats, 1);
+		$value = db_result(db_query("SELECT sid FROM {games_stats} WHERE admin_name = 'stat_test' AND stat_type = 'count'"));
+		$this->assertEqual($value, 7, t('Check that the register stats works'));
+	}
+}
+
+//-service tests

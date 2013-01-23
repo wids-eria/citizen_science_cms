@@ -1,0 +1,60 @@
+Index: services_keyauth.admin.inc
+===================================================================
+--- services_keyauth.admin.inc	(revision 6)
++++ services_keyauth.admin.inc	(working copy)
+@@ -150,6 +150,7 @@
+   else {
+     db_query("INSERT INTO {services_keys} (kid, title, domain)
+       VALUES ('%s', '%s', '%s')", $key['kid'], $key['title'], $key['domain']);
++	module_invoke_all('services_keyauth_insert', $key['kid']);  
+     $return = SAVED_NEW;
+   }
+   foreach ($key['method_access'] as $method => $value) {
+@@ -168,6 +169,7 @@
+  */
+ function services_keyauth_admin_keys_delete($kid) {
+   db_query("DELETE FROM {services_keys} WHERE kid = '%s'", $kid);
++  module_invoke_all('services_keyauth_delete', $kid);
+ }
+ 
+ /**
+Index: services_keyauth.inc
+===================================================================
+--- services_keyauth.inc	(revision 6)
++++ services_keyauth.inc	(working copy)
+@@ -215,6 +215,9 @@
+ 
+     $api_key = db_result(db_query("SELECT kid FROM {services_keys} WHERE domain = '%s'", $domain));
+ 
++    // Sets the keyauth static var for future use. 
++    _services_keyauth_set_current_key($api_key);
++	
+     //if (!services_keyauth_validate_key($api_key, $timestamp, $domain, $nonce, $method_name, $hash_parameters, $hash)) {
+     if ($hash != services_get_hash($timestamp, $domain, $nonce, $method, $args)) {
+       return services_error(t('Invalid API key.'), 401);
+@@ -251,3 +254,24 @@
+     $args[0] = services_get_hash($args[2], $args[1], $args[3], $method, $args_stripped);
+   }
+ }
++
++/**
++ * Set static var if $newkey is not null
++ * @param $newkey
++ * @param $clear
++ */
++function _services_keyauth_set_current_key($newkey = NULL, $clear = FALSE) {
++	static $key;
++	if($clear == TRUE)
++		$key = NULL;
++	if($newkey != NULL)
++		$key = $newkey;
++	return $key;
++}
++
++/**
++ * Get the current auth key. Only valid inside a service callback protected by keyauth.
++ */
++function services_keyauth_get_current_key() {
++	return _services_keyauth_set_current_key();
++}
+\ No newline at end of file

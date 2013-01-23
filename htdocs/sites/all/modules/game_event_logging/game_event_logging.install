@@ -1,0 +1,137 @@
+<?php
+/**
+ * Implementation of hook_install().
+ */
+function game_event_logging_install() {
+	// Create tables.
+	drupal_install_schema('game_event_logging');
+}
+
+/**
+ * Implementation of hook_uninstall().
+ */
+function game_event_logging_uninstall() {
+	// Remove tables.
+	drupal_uninstall_schema('game_event_logging');
+}
+
+/**
+ * Implementation of hook_schema().
+ */
+function game_event_logging_schema() {
+	$schema = array();
+	$schema['game_event_type'] = array(
+		'description' 	=> 'Event type in a game.',
+		'fields' 		=>  array(
+			'etid'			=> array(
+				'type'			=> 'serial',
+				'unsigned'		=> TRUE,
+				'not null'		=> TRUE,
+				'description'	=> 'auto created game event id'
+			),
+			'name'	=> array(
+				'type'			=> 'varchar',
+				'length'		=> 255,
+				'not null'		=> TRUE,
+				'description'	=> 'admin title passed in on creation'
+			),
+			'title'			=> array(
+				'type'			=> 'varchar',
+				'length'		=> 255,
+				'description'	=> 'title created by admin through form'
+			),
+			'description'	=> array(
+				'type'			=> 'text',
+				'description'	=> 'description of the event created by admin through form'
+			),
+			'format'		=> array(
+				'type'			=> 'text',
+				'description'	=> 'format of the event type when printed out'
+			),
+		),
+		'primary key' 	=> array('etid')
+	);
+	$schema['game_event_type_param'] = array(
+		'description'	=> 'Parameters related to game event type.',
+		'fields'		=> array(
+			'etid'	=> array(
+				'type'			=> 'int',
+				'unsigned'		=> TRUE,
+				'not null'		=> TRUE,
+				'description'	=> 'game event type id'
+			),
+			'idx'	=> array(
+				'type'			=> 'int',
+				'unsigned'		=> TRUE,
+				'not null'		=> TRUE,
+				'description'	=> 'position of argument'
+			),
+			'name' => array(
+				'type'			=> 'varchar',
+				'length'		=> 32,
+				'not null'		=> TRUE,
+				'description'	=> 'name of parameter',
+			),
+		),
+		'primary key' 	=> array('etid','idx'),
+	);
+	$schema['game_event_arg'] = array(
+		'description'	=> 'Arguments for the event.',
+		'fields'		=> array(
+			'eid'	=> array(
+				'type'			=> 'int',
+				'unsigned'		=> TRUE,
+				'not null'		=> TRUE,
+				'description'	=> 'event id'
+			),
+			'idx'	=> array(
+				'type'			=> 'int',
+				'unsigned'		=> TRUE,
+				'not null'		=> TRUE,
+				'description'	=> 'argument idx'
+			),
+			'value' => array(
+				'type'			=> 'varchar',
+				'length'		=> 255,
+				'not null'		=> TRUE,
+				'description'	=> 'argument value',
+			),
+		),
+		'primary key' 	=> array('eid','idx'),
+	);
+	$schema['game_event'] = array(
+		'description'	=> '',
+		'fields'		=> array(
+			'eid'		=> array(
+				'type'			=> 'serial',
+				'not null'		=> TRUE,
+				'description'	=> 'game event id'
+			),
+			'psid'		=> array(
+				'type'			=> 'int',
+				'unsigned'		=> TRUE,
+				'not null'		=> TRUE,
+				'description'	=> 'play session id'
+			),
+			'etid'			=> array(
+				'type'			=> 'int',
+				'unsigned'		=> TRUE,
+				'not null'		=> TRUE,
+				'description'	=> 'event type id'
+			),
+			'timestamp'	=> array(
+				'type'			=> 'int',
+				'unsigned'		=> TRUE,
+				'not null'		=> TRUE,
+				'description'	=> 'time event triggered',
+			),
+		),
+		'primary key' => array('eid'),
+		'indexes' 		=> array(
+			'psid'		=> array('psid'),
+			'etid' 		=> array('etid'),
+			'timestamp' => array('timestamp')
+		),
+	);
+	return $schema;
+}

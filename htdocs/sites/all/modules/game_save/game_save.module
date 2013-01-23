@@ -1,0 +1,324 @@
+<?php
+module_load_include('php', 'amfphp', 'amfphp/core/amf/util/WrapperClasses');
+
+/**
+ * Implementation of hook_perm().
+ */
+function game_save_perm() {
+  $perms[] = 'use game save';
+  $perms[] = 'game save admin';
+  return $perms;
+}
+
+/**
+ * Implementation of hook_service().
+ */
+function game_save_service() {
+  return array(
+    array(
+      '#method' => 'tracking.saveState',
+      '#callback' => '_game_save_svc_save',
+      //'#access arguments' => array('use game save'),
+      '#access callback' => '_game_save_access_check',
+      '#args' => array(
+        array(
+          '#type' => 'int',
+          '#name' => 'psid',
+          '#optional' => FALSE,
+          '#description' => t('The play session of the save used to get the game session id'),
+          '#signed' => FALSE,
+        ),
+        array(
+          '#type' => 'struct',
+          '#name' => 'state',
+          '#optional' => FALSE,
+          '#description' => t('The save data in a ByteArray'),
+        ),
+        array(
+          '#type' => 'int',
+          '#name' => 'format',
+          '#optional' => FALSE,
+          '#description' => t('The format/version of the save data'),
+        ),
+        array(
+          '#type' => 'int',
+          '#name' => 'time',
+          '#optional' => TRUE,
+          '#description' => t('Time the save data was saved.'),
+        ),
+      ),
+      '#file' => array('module' => 'game_save','file' => 'inc', 'file name' => 'game_save.services'),
+      '#help' => t('Saves the game state'),
+    ),
+    array(
+      '#method' => 'tracking.resumeGame',
+      '#callback' => '_game_save_svc_resume',
+      '#access arguments' => array('use game save'),
+      '#args' => array(
+        array(
+          '#type' => 'int',
+          '#name' => 'gsid',
+          '#optional' => FALSE,
+          '#description' => t('Id of the game session to load.'),
+          '#signed' => FALSE,
+        ),
+        array(
+          '#type' => 'string',
+          '#name' => 'version',
+          '#optional' => FALSE,
+          '#description' => 'The version of the game.',
+        ),
+        array(
+          '#type' => 'int',
+          '#name' => 'time',
+          '#optional' => TRUE,
+          '#description' => 'The time to store in the session table. If not set uses server time.  Set in UTC.',
+          '#signed' => FALSE,
+        ),
+        array(
+          '#type' => 'int',
+          '#name' => 'uid',
+          '#optional' => TRUE,
+          '#description' => t('Id of the user to get the list for.'),
+          '#signed' => FALSE,
+        ),
+      ),
+      '#return' => 'struct',
+      '#file' => array('module' => 'game_save','file' => 'inc', 'file name' => 'game_save.services'),
+      '#help' => t("Call to return the save game data to the game. <br />
+        Returns {'psid':int, 'heartbeatSec':int, 'stats_enabled':boolean, 'state':{'data':byteArray,'format':int}}"),
+    ),
+    array(
+      '#method' => 'tracking.listSaves',
+      '#callback' => '_game_save_svc_list_saves',
+      '#access arguments' => array('use game save'),
+      '#args' => array(
+        array(
+          '#type' => 'int',
+          '#name' => 'uid',
+          '#optional' => TRUE,
+          '#description' => t('Id of the user to get the list for.'),
+          '#signed' => FALSE,
+        ),
+      ),
+      '#return' => 'array',
+      '#file' => array('module' => 'game_save','file' => 'inc', 'file name' => 'game_save.services'),
+      '#help' => t('Returns a list of saved games for the user.  Returns Array{"gsid":int, "modifiedDate":int, "format":int}'),
+    ),
+  );
+}
+
+function _game_save_access_check($psid, $state, $format, $time = NULL) {
+  global $user;
+  $gsid = _game_stats_get_game_session_by_psid($psid);
+  $user_gsid = _game_stats_user_gsid_check($user->uid, $gsid);
+
+  if((user_access('use game save') && $user_gsid != FALSE) || user_access('game save admin'))
+    $access = TRUE;
+  else
+    $access = FALSE;
+  return $access;
+}
+
+/**
+ * Called by services to save the save game data into the db
+ * @param int $gsid
+ * @param ByteArray $game_state
+ * @param int $format
+ * @param int $save_time
+ */
+function _game_save($gsid, $game_state, $format, $save_time = NULL) {
+  if(empty($save_time))
+    $time = time();
+  else
+    $time = $save_time;
+
+  //watchdog('Save', print_r($game_state, TRUE));
+  $saved_data = $game_state->data;
+  $save_id = db_result(db_query('SELECT gsid FROM {games_saves} WHERE gsid = %d', $gsid));
+  
+  if(empty($saved_data)) {
+    throw new Exception('The data passed in to be saved was not sent properly in the array or you where trying to save game data that was empty.');
+  } else {
+    if($save_id)
+      $return = _game_save_update($gsid, $time, $saved_data, $format);
+    else
+      $return = _game_save_create($gsid, $time, $saved_data, $format);
+  }
+  return $return;
+}
+
+/**
+ * Resumes the saved game returning the game data to the game along with the game settings.
+ * @param int $save_id
+ * @param string $version
+ * @param int $time
+ */
+function _game_save_resume_game($gsid, $version, $time, $uid) {
+  global $user;
+  if(is_null($uid))
+    $uid = $user->uid;
+
+  watchdog('save_game', 'gsid:'.$gsid.' version:'.$version.' time:'.$time.' uid:'.$uid);
+  
+  //NOTE: We join with the game session table as a security check to make sure someone isn't loading
+  //somebody else's save
+  $saved_game = db_fetch_array(db_query("SELECT gs.save_data, gs.format FROM {games_saves} gs
+    INNER JOIN {games_game_session_users} ggsu ON ggsu.gsid = gs.gsid AND ggsu.uid = %d
+    WHERE gs.gsid = %d", $uid, $gsid));
+  
+  watchdog('save_game', 'saved_game:'.print_r($saved_game, TRUE));
+
+  if($saved_game == FALSE)
+    throw new Exception("Save game not found");
+  
+  $saved_data = new ByteArray($saved_game['save_data']);
+
+  //TODO: Ideally this would hook up better with start game so it doesn't duplicate code
+  $stored_time = _game_stats_time_diff_check($time);
+
+  //Close all previous play session and open a new one.
+  _game_stats_close_play_sessions($game_id);
+  $psid = _game_stats_start_play_session($game_id, $gsid, $version, $user->uid, $stored_time);
+
+  //Interval for the heartbeat.  Based on seconds.
+  $heartbeatSec = 10;
+  $stats_enabled = user_access('use game stats');
+
+  $game_settings = array(
+    'psid' => (int)$psid,
+    'heartbeatSec' => (int)$heartbeatSec,
+    'stats_enabled' => (bool)$stats_enabled,
+    'state' => array(
+      'data' => $saved_data,
+      'format' => (int)$saved_game['format']
+    )
+  );
+  $game_settings = array_merge($game_settings, module_invoke_all('game_stats_start_game_settings', $game_id));
+  return $game_settings;
+}
+
+/**
+ * Deletes a saved game by gsid
+ * @param int $gsid
+ */
+function _game_save_delete($gsid) {
+  db_query('DELETE FROM {games_saves} WHERE gsid = %d', $gsid);
+}
+
+/**
+ * Delete all save games for a single user for a single game.
+ * @param int $game_id
+ */
+function _game_save_delete_all($game_id) {
+  global $user;
+  db_query("DELETE gs.*
+    FROM {games_saves} gs
+    INNER JOIN {games_game_session} ggs ON ggs.gsid = gs.gsid
+    INNER JOIN {games_game_session_users} ggsu ON ggsu.gsid = gs.gsid
+    WHERE ggsu.uid = %d AND ggs.game_id = %d", $user->uid, $game_id);
+}
+
+/**
+ * Implementation of hook_game_stats_start_game().
+ * @param $game_id
+ * @throws Exception
+ */
+function game_save_game_stats_start_game($game_id) {
+  _game_save_delete_all($game_id);
+}
+
+/**
+ * Returns a list of saved games based off of the game session id
+ * @param int $game_id
+ */
+function _game_save_list($game_id, $uid = NULL) {
+  global $user;
+  if(is_null($uid))
+    $uid = $user->uid;
+  $query = db_query('SELECT gs.gsid, gs.modified_date, gs.format
+    FROM {games_saves} gs
+    INNER JOIN {games_game_session} ggs ON ggs.gsid = gs.gsid
+    INNER JOIN {games_game_session_users} ggsu ON ggsu.gsid = gs.gsid
+    WHERE ggs.game_id = %d AND ggsu.uid = %d ORDER BY gs.modified_date DESC', $game_id, $uid);
+  $save_list = array();
+  while($row = db_fetch_array($query)) {
+    $save_list[] = array(
+      'gsid' => (int)$row['gsid'],
+      'modifiedDate' => (int)$row['modified_date'],
+      'format' => (int)$row['format'],
+    );
+  }
+  return $save_list;
+}
+
+/**
+ * Creates the save game in the database and then returns the save_id that is created.
+ * @param int $gsid
+ * @param int $time
+ * @param string $save_data
+ * @param int $save_format
+ */
+function _game_save_create($gsid, $time, $save_data, $save_format) {
+  $data = array(
+    'gsid' => $gsid,
+    'modified_date' => $time,
+    'format' => $save_format,
+    'save_data' => $save_data,
+  );
+  drupal_write_record('games_saves', $data);
+  return $data;
+}
+
+/**
+ * Update the save data
+ * @param int $gsid
+ * @param int $time
+ * @param string $save_data
+ * @param int $save_format
+ */
+function _game_save_update($gsid, $time, $save_data, $save_format) {
+  $data = array(
+    'gsid' => $gsid,
+    'modified_date' => $time,
+    'format' => $save_format,
+    'save_data' => $save_data
+  );
+  drupal_write_record('games_saves', $data, 'gsid');
+  return $data;
+}
+
+/**
+ * Implementation of hook_game_stats_complete_game($gsid)
+ */
+function game_save_game_stats_complete_game($game_id, $gsid) {
+  _game_save_delete_all($game_id);
+}
+
+/**
+* Implementation of hook_game_stats_add_js
+*/
+function game_save_game_stats_add_js($game_id) {
+  if(user_access('use game save'))
+    return array('saveState' => TRUE);
+  else
+    return array('saveState' => FALSE);
+}
+
+
+// -------------------------------------  REQUIRED FOR Drupal 6.x installations (by services) ------------------------------------- //
+/*
+ * Implementation of hook_enable()
+ * Perform necessary actions after module is enabled. (like clear the services:methods cache)
+ */
+function game_save_enable() {
+  cache_clear_all('services:methods', 'cache');
+}
+
+/*
+ * Implementation of hook_disable()
+ * Perform necessary actions before module is disabled. (like clear the services:methods cache)
+ */
+function game_save_disable() {
+  cache_clear_all('services:methods', 'cache');
+}
