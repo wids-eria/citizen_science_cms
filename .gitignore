@@ -1,2 +1,3 @@
 htdocs/phpma/config.inc.php
 htdocs/sites/default/settings.php
+htdocs/sites/default/files/**
